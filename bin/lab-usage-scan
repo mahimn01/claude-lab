@@ -1,0 +1,240 @@
+#!/usr/bin/env python3
+"""Measure where Claude Code tokens and tool output go, split into lab and normal sessions.
+
+What: streams ~/.claude/projects/**/*.jsonl (main and subagent transcripts) and counts served-model
+calls (Opus share), input-side tokens, and tool calls with their result volume by tool name.
+Read is split into image / pdf / text, and MCP tools are grouped by server.
+Why: to check that claude-lab really routes to Sonnet and to see which tools fill the context.
+Run: bin/lab-usage-scan [--since 2026-10-13] [--top 8] [--json] [--out FILE]
+Changes: nothing. It only reads transcripts; --out writes the full JSON report to FILE.
+
+A session counts as LAB when its id matches a run directory under ~/.local/state/claude-lab/runs
+(the lab launches with --session-id = run id), or when it calls harness-lab tools or agents.
+"""
+from __future__ import annotations
+
+import argparse
+from collections import defaultdict
+from datetime import datetime, timezone
+import json
+from pathlib import Path
+import sys
+
+HOME = Path.home()
+IMAGE_SUFFIXES = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.heic', '.bmp', '.tiff'}
+TOKEN_KEYS = ('input_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens')
+
+
+def new_group() -> dict:
+    return {'sessions': set(), 'files': 0, 'badLines': 0, 'synthetic': 0,
+            'calls': defaultdict(lambda: {'main': 0, 'subagent': 0}),
+            'tokens': defaultdict(lambda: {'input_side': 0, 'output': 0}),
+            'tools': defaultdict(lambda: {'calls': 0, 'resultChars': 0}),
+            'agents': defaultdict(lambda: defaultdict(int))}
+
+
+def tool_label(name: str, tool_input: dict) -> str:
+    """Group MCP tools by server and split Read by what it read."""
+    if name.startswith('mcp__'):
+        return 'mcp:' + name.split('__')[1]
+    if name == 'Read':
+        suffix = Path(str(tool_input.get('file_path', ''))).suffix.lower()
+        return 'Read:image' if suffix in IMAGE_SUFFIXES else 'Read:pdf' if suffix == '.pdf' else 'Read:text'
+    return name
+
+
+def result_chars(content) -> tuple[int, str | None]:
+    """Characters in a tool result, plus the media kind when it carries an image or document."""
+    if isinstance(content, str):
+        return len(content), None
+    total, kind = 0, None
+    for block in content if isinstance(content, list) else []:
+        if not isinstance(block, dict):
+            continue
+        if block.get('type') == 'text':
+            total += len(block.get('text', ''))
+        elif block.get('type') in ('image', 'document'):
+            total += len(str((block.get('source') or {}).get('data', '')))
+            kind = 'image' if block['type'] == 'image' else 'pdf'
+    return total, kind
+
+
+def scan_file(path: Path, since_utc: str, stats: dict, is_subagent: bool) -> bool:
+    """Add one transcript's numbers to stats; return True if it shows harness-lab use."""
+    lab_evidence = False
+    seen_messages = {}
+    tool_names = stats['toolNames']
+    with path.open('r', encoding='utf-8', errors='replace') as handle:
+        for line in handle:
+            # Only assistant usage and tool results matter; skip parsing everything else.
+            if '"usage"' not in line and '"tool_result"' not in line:
+                continue
+            try:
+                record = json.loads(line)
+            except ValueError:
+                stats['badLines'] += 1
+                continue
+            if not isinstance(record, dict) or str(record.get('timestamp', '9999'))[:19] < since_utc:
+                continue
+            message = record.get('message') or {}
+            if record.get('type') == 'assistant':
+                # A streamed reply is split into one record per content block; count the call once.
+                key = message.get('id') or record.get('requestId') or record.get('uuid')
+                seen_messages[key] = (message.get('model') or 'unknown', message.get('usage') or {})
+                for block in message.get('content') or []:
+                    if isinstance(block, dict) and block.get('type') == 'tool_use':
+                        name = str(block.get('name', ''))
+                        tool_input = block.get('input') if isinstance(block.get('input'), dict) else {}
+                        tool_id = block.get('id') or f"anonymous-{len(stats['toolCalls'])}"
+                        tool_names[tool_id] = stats['toolCalls'][tool_id] = tool_label(name, tool_input)
+                        if name.startswith('mcp__harness-lab__') or str(tool_input.get('subagent_type', '')).startswith('harness-lab:'):
+                            lab_evidence = True
+            elif record.get('type') == 'user' and isinstance(message.get('content'), list):
+                for block in message['content']:
+                    if isinstance(block, dict) and block.get('type') == 'tool_result':
+                        chars, kind = result_chars(block.get('content'))
+                        tool_id = block.get('tool_use_id')
+                        label = tool_names.get(tool_id, 'unknown')
+                        # A Read without a known suffix is classified by what it returned.
+                        if label == 'Read:text' and kind:
+                            label = tool_names[tool_id] = 'Read:' + kind
+                            if tool_id in stats['toolCalls']:
+                                stats['toolCalls'][tool_id] = label
+                        stats['results'].append((label, chars))
+    for model, usage in seen_messages.values():
+        stats['messages'].append((model, usage, is_subagent))
+    return lab_evidence
+
+
+def session_files(projects: Path, since_ts: float):
+    """Yield (session id, file, is_subagent) for transcripts modified since the cutoff."""
+    for path in projects.glob('*/**/*.jsonl'):
+        try:
+            if path.stat().st_mtime < since_ts:
+                continue
+        except OSError:
+            continue
+        parts = path.relative_to(projects).parts
+        if len(parts) == 2:
+            yield path.stem, path, False
+        else:
+            yield parts[1], path, True
+
+
+def agent_type(path: Path) -> str:
+    meta = path.with_name(path.stem + '.meta.json')
+    try:
+        return json.loads(meta.read_text()).get('agentType') or 'unknown'
+    except (OSError, ValueError):
+        return 'unknown'
+
+
+def scan(projects: Path, runs: Path, since: str) -> dict:
+    run_ids = {p.name for p in runs.iterdir()} if runs.is_dir() else set()
+    start = datetime.strptime(since, '%Y-%m-%d').astimezone()
+    # Transcript timestamps are UTC; compare them with local midnight converted to UTC.
+    since_utc = start.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
+    sessions = defaultdict(list)
+    for session, path, is_subagent in session_files(projects, start.timestamp()):
+        sessions[session].append((path, is_subagent))
+    groups = {'LAB': new_group(), 'NORMAL': new_group()}
+    for session, files in sessions.items():
+        stats = {'toolNames': {}, 'toolCalls': {}, 'results': [], 'messages': [], 'badLines': 0, 'agents': []}
+        lab = session in run_ids
+        for path, is_subagent in files:
+            kind = agent_type(path) if is_subagent else 'main'
+            before = len(stats['messages'])
+            lab = scan_file(path, since_utc, stats, is_subagent) or lab or kind.startswith('harness-lab:')
+            stats['agents'].extend((kind, model) for model, _, _ in stats['messages'][before:] if model != '<synthetic>')
+        group = groups['LAB' if lab else 'NORMAL']
+        group['sessions'].add(session)
+        group['files'] += len(files)
+        group['badLines'] += stats['badLines']
+        for model, usage, is_subagent in stats['messages']:
+            # Placeholder replies (API errors, interrupts) are not model calls.
+            if model == '<synthetic>':
+                group['synthetic'] += 1
+                continue
+            group['calls'][model]['subagent' if is_subagent else 'main'] += 1
+            group['tokens'][model]['input_side'] += sum(int(usage.get(k) or 0) for k in TOKEN_KEYS)
+            group['tokens'][model]['output'] += int(usage.get('output_tokens') or 0)
+        for label in stats['toolCalls'].values():
+            group['tools'][label]['calls'] += 1
+        for label, chars in stats['results']:
+            group['tools'][label]['resultChars'] += chars
+        for kind, model in stats['agents']:
+            group['agents'][kind][model] += 1
+    return {name: finish(group) for name, group in groups.items()}
+
+
+def finish(group: dict) -> dict:
+    """Turn counters into plain JSON with totals and the Opus share of served calls."""
+    calls = {m: dict(v, total=v['main'] + v['subagent']) for m, v in group['calls'].items()}
+    total = sum(v['total'] for v in calls.values())
+    opus = sum(v['total'] for m, v in calls.items() if 'opus' in m)
+    tools = dict(sorted(group['tools'].items(), key=lambda kv: -kv[1]['resultChars']))
+    mcp = {k: v for k, v in tools.items() if k.startswith('mcp:')}
+    return {'sessions': len(group['sessions']), 'files': group['files'], 'badLines': group['badLines'],
+            'servedCalls': total, 'opusCalls': opus, 'syntheticMessages': group['synthetic'], 'opusSharePct': round(100 * opus / total, 1) if total else 0.0,
+            'inputSideTokens': sum(v['input_side'] for v in group['tokens'].values()),
+            'outputTokens': sum(v['output'] for v in group['tokens'].values()),
+            'byModel': {m: {**calls[m], **group['tokens'][m]} for m in sorted(calls, key=lambda m: -calls[m]['total'])},
+            'tools': tools,
+            'toolCalls': sum(v['calls'] for v in tools.values()),
+            'toolResultChars': sum(v['resultChars'] for v in tools.values()),
+            'mcpByServer': mcp,
+            'agentTypes': {k: dict(v) for k, v in sorted(group['agents'].items(), key=lambda kv: -sum(kv[1].values()))}}
+
+
+def human(n: float) -> str:
+    for unit, size in (('B', 1e9), ('M', 1e6), ('K', 1e3)):
+        if n >= size:
+            return f'{n / size:.1f}{unit}'
+    return str(int(n))
+
+
+def summary_lines(report: dict, top: int) -> list[str]:
+    """At most about 40 lines: headline per group, then the biggest tools, MCP servers and agents."""
+    lines = [f"Since {report['since']} · files scanned {report['files']}"]
+    for name in ('LAB', 'NORMAL'):
+        g = report['groups'][name]
+        lines.append(f"{name}: {g['sessions']} sessions · {g['servedCalls']} served calls · Opus {g['opusSharePct']}% · "
+                     f"input-side {human(g['inputSideTokens'])} tokens · tool results {human(g['toolResultChars'])} chars")
+        for tool, v in list(g['tools'].items())[:top]:
+            share = 100 * v['resultChars'] / g['toolResultChars'] if g['toolResultChars'] else 0
+            lines.append(f"  {tool:<24} {v['calls']:>7} calls {human(v['resultChars']):>8} chars {share:5.1f}%")
+        if g['mcpByServer']:
+            lines.append('  MCP: ' + ', '.join(f"{k[4:]} {v['calls']}/{human(v['resultChars'])}" for k, v in list(g['mcpByServer'].items())[:top]))
+        for kind, models in list(g['agentTypes'].items())[:max(3, top // 2)]:
+            lines.append(f"  agent {kind}: " + ', '.join(f'{m} {n}' for m, n in sorted(models.items(), key=lambda kv: -kv[1])[:3]))
+    return lines
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--since', default='2026-10-13', help='YYYY-MM-DD; older files and records are skipped')
+    parser.add_argument('--top', type=int, default=8, help='rows per section in the summary')
+    parser.add_argument('--json', action='store_true', help='print the full JSON report instead of the summary')
+    parser.add_argument('--out', type=Path, help='also write the full JSON report to this file')
+    parser.add_argument('--projects', type=Path, default=HOME / '.claude/projects', help=argparse.SUPPRESS)
+    parser.add_argument('--runs', type=Path, default=HOME / '.local/state/claude-lab/runs', help=argparse.SUPPRESS)
+    opt = parser.parse_args()
+    try:
+        datetime.strptime(opt.since, '%Y-%m-%d')
+    except ValueError:
+        parser.error('--since must be YYYY-MM-DD')
+    groups = scan(opt.projects, opt.runs, opt.since)
+    report = {'since': opt.since, 'generatedAt': datetime.now().isoformat(timespec='seconds'),
+              'files': sum(g['files'] for g in groups.values()), 'groups': groups,
+              'note': 'Image and PDF results are counted as base64 characters, which overstates their token cost.'}
+    if opt.out:
+        opt.out.parent.mkdir(parents=True, exist_ok=True)
+        opt.out.write_text(json.dumps(report, indent=2) + '\n')
+    print(json.dumps(report, indent=2) if opt.json else '\n'.join(summary_lines(report, opt.top)))
+    if opt.out:
+        print(f'Full report: {opt.out}')
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

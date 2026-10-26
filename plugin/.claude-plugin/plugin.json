@@ -1,0 +1,36 @@
+{
+  "name": "harness-lab",
+  "version": "0.2.0",
+  "description": "Sonnet and Opus routing, scoped workers, compact task handoffs, verification, usage accounting, and primary-account quota fallback",
+  "author": {
+    "name": "Mahimn Patel"
+  },
+  "lspServers": {
+    "pyright": {
+      "command": "pyright-langserver",
+      "args": [
+        "--stdio"
+      ],
+      "extensionToLanguage": {
+        ".py": "python",
+        ".pyi": "python"
+      }
+    },
+    "typescript": {
+      "command": "typescript-language-server",
+      "args": [
+        "--stdio"
+      ],
+      "extensionToLanguage": {
+        ".ts": "typescript",
+        ".tsx": "typescriptreact",
+        ".js": "javascript",
+        ".jsx": "javascriptreact",
+        ".mts": "typescript",
+        ".cts": "typescript",
+        ".mjs": "javascript",
+        ".cjs": "javascript"
+      }
+    }
+  }
+}

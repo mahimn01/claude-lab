@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# claude-lab: one command for the Claude Lab launcher and the optional parallel session runner.
+#
+#   claude-lab [prompt]            launch an optimized Claude Code session in the current folder
+#   claude-lab demo | doctor | auth | bili | report | route | verify ...   (see `claude-lab --help`)
+#   claude-lab start|list|count|tail|nudge|kill|status|protected ...        parallel tmux session runner
+#
+# The parallel runner is the optional parallel/ module. If it is not installed, the launcher still works.
+set -euo pipefail
+
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
+
+case "${1:-}" in
+  start|list|ls|count|status|nudge|tail|kill|protected|sessions)
+    [[ "${1}" == sessions ]] && shift
+    runner="${CLAUDE_LAB_SESSIONS_CMD:-}"
+    if [[ -z "$runner" ]]; then
+      if [[ -x "$ROOT/parallel/bin/claude-lab-sessions" ]]; then runner="$ROOT/parallel/bin/claude-lab-sessions"
+      elif command -v claude-lab-sessions >/dev/null 2>&1; then runner="$(command -v claude-lab-sessions)"
+      else echo "claude-lab: the parallel session runner is not installed (see parallel/README.md)." >&2; exit 1
+      fi
+    fi
+    exec "$runner" "$@"
+    ;;
+esac
+
+# Optional KEY=VALUE defaults for the launcher (never required, never contains secrets by default).
+env_file="${CLAUDE_LAB_ENV_FILE:-${CLAUDE_LAB_CONFIG_DIR:-$HOME/.config/claude-lab}/env}"
+if [[ -r "$env_file" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$env_file"
+  set +a
+fi
+
+exec "${CLAUDE_LAB_PYTHON:-python3}" "$ROOT/bin/lab.py" "$@"
