@@ -1,6 +1,7 @@
 ---
 name: reasoner
 description: Difficult architecture, mathematical reasoning, or a precise unresolved debugging question.
+model: opus
 effort: high
 tools: Read, Bash, Glob, Grep
 ---

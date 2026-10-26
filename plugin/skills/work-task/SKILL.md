@@ -10,9 +10,20 @@ select the relevant work folder with mcp__harness-lab__select_project. Read that
 instructions. Use absolute paths and explicit project directories in Bash commands; acceptance
 checks run in the selected folder. Never use the entire home as a source-verification scope.
 
-For a small change, work directly. For multiple independent scopes, use the lab investigator,
-implementer, reasoner and reviewer specialists. Give each its question or owned files, relevant
-source paths, acceptance criteria and a compact return format. Do not fork full chat history.
+## Small change: work directly
+
+A change is small when it touches at most 3 source files and about 80 changed lines in total, and
+the task is not financial or security-sensitive (authentication, cryptography, secrets, concurrency,
+data migrations). Do it yourself in the lead: read the code, edit, run the project's own tests, report.
+Do not spawn workers or a reviewer, do not record a checkpoint, and do not call verify. The lab measures
+the change when you finish; at or under the limit it does not ask for any of them. Choose this path by
+default: a worker or reviewer adds fixed overhead that a small change rarely repays.
+
+## Larger or riskier change: full handoff
+
+Above the small-change limit, or for financial or security-sensitive work, use the specialists for
+independent scopes (investigator, implementer, reasoner, reviewer). Give each its question or owned files,
+relevant source paths, acceptance criteria and a compact return format. Do not fork full chat history.
 
 Record one compact checkpoint with the lab checkpoint tool: source/context pointers, plan,
 implementation decisions, unresolved issues, acceptance criteria and meaningful check commands
@@ -20,12 +31,19 @@ as argv arrays. The runtime writes brief, context, plan, implementation and veri
 outside the repository. Read these for a stage handoff instead of rerunning discovery.
 
 Run the recorded acceptance checks with the lab verify tool. It invokes the usual Bash permission
-guards, then records real exit codes and a fingerprint of current source. For code edits,
-use one independent reviewer after checks. Fix material findings, repeat affected checks and review
-the final revision. Changes through Bash also invalidate evidence when the source fingerprint changes.
+guards, then records real exit codes and a fingerprint of current source. Then use one independent
+reviewer (Opus). Fix material findings, repeat affected checks and review the final revision. Changes
+through Bash also invalidate evidence when the source fingerprint changes. If a task started small and
+grows past the limit, switch to this path before you finish.
 
-When an investigation is hard or its result is uncertain, escalate that specific question to the
-reasoner once with collected evidence. Keep ordinary implementation on Sonnet. The lead keeps one
+## Models
+
+The investigator and implementer run on Sonnet. The reviewer and reasoner run on Opus, so spawn them
+only when this path calls for it. Do not pass a `model` argument to override a specialist; the lab
+ignores an Opus request for the investigator or implementer.
+
+When an investigation is hard or its result is uncertain after your own attempt, escalate that specific
+question to the reasoner once with collected evidence. Keep ordinary implementation on Sonnet. The lead keeps one
 model for the whole task (a mid-session switch rebuilds the prompt cache); failed checks or a
 rejected review call for a reasoner, not a model switch.
 

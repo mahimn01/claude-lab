@@ -1,6 +1,7 @@
 ---
 name: investigator
 description: Focused repository exploration or source lookup with a compact evidence-backed result.
+model: sonnet
 effort: low
 maxTurns: 20
 omitClaudeMd: true

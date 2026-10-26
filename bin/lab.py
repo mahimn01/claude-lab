@@ -31,6 +31,13 @@ def _env_path(name: str, default: Path) -> Path:
     return Path(value).expanduser() if value else default
 
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        return max(0, int(os.environ.get(name, default)))
+    except ValueError:
+        return default
+
+
 def _env_list(name: str, sep: str = ',') -> list[str]:
     return [item.strip() for item in os.environ.get(name, '').split(sep) if item.strip()]
 
@@ -90,9 +97,7 @@ SECRET = re.compile(r'AIza[\w-]{25,}|sk-(?:ant|proj)-[\w-]{15,}|(?i:Bearer)\s+[\
 CODE_SUFFIXES = {'.py','.ts','.tsx','.js','.jsx','.mjs','.cjs','.json','.toml','.yaml','.yml','.rs','.go','.c','.cpp','.h','.ipynb'}
 
 
-def fingerprint(project: Path) -> dict:
-    """Hash source state, including changes made through Bash, without saving contents."""
-    project = project.resolve()
+def _source_paths(project: Path) -> list[Path]:
     result = subprocess.run(['git','ls-files','-z','--cached','--others','--exclude-standard'],
                             cwd=project,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,check=False)
     if result.returncode == 0:
@@ -106,11 +111,64 @@ def fingerprint(project: Path) -> dict:
     paths = sorted(set(p for p in paths if p.suffix in CODE_SUFFIXES and not p.is_symlink()))
     if len(paths) > 20000:
         raise ValueError('Project scope is too broad; launch the lab inside the actual repository')
+    return paths
+
+
+def file_hashes(project: Path) -> dict:
+    project = project.resolve()
+    return {str(p.relative_to(project)): (hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else 'deleted')
+            for p in _source_paths(project)}
+
+
+def fingerprint(project: Path) -> dict:
+    """Hash source state, including changes made through Bash, without saving contents."""
+    project = project.resolve()
     digest = hashlib.sha256()
+    paths = _source_paths(project)
     for path in paths:
         digest.update(str(path.relative_to(project)).encode('utf-8',errors='surrogateescape'))
         digest.update(hashlib.sha256(path.read_bytes()).digest() if path.is_file() else b'deleted')
     return {'sha256':digest.hexdigest(),'sourceFiles':len(paths)}
+
+
+def _file_lines(path: Path) -> int:
+    try:
+        return len(path.read_bytes().splitlines())
+    except OSError:
+        return 0
+
+
+def change_size(project: Path, baseline: dict | None) -> dict | None:
+    """How much source changed since the task baseline: files and changed lines.
+
+    Lines come from `git diff --numstat HEAD` for tracked files and the file length for new ones. When git cannot
+    answer, the whole file length is used. Both over-count, never under-count, so a doubtful size sends the task
+    down the full review path rather than the small-change fast path. None means the size is unknown."""
+    if baseline is None:
+        return None
+    project = project.resolve()
+    now = file_hashes(project)
+    changed = sorted(p for p in set(now) | set(baseline) if now.get(p) != baseline.get(p))
+    if len(changed) > 25:
+        return {'files': len(changed), 'lines': None}
+    lines = 0
+    for rel in changed:
+        numstat = subprocess.run(['git','diff','--numstat','HEAD','--',rel],cwd=project,stdout=subprocess.PIPE,
+                                 stderr=subprocess.DEVNULL,check=False)
+        row = numstat.stdout.decode('utf-8',errors='replace').split('\t') if numstat.returncode == 0 else []
+        if len(row) >= 3 and row[0].isdigit() and row[1].isdigit():
+            lines += int(row[0]) + int(row[1])
+        else:
+            lines += _file_lines(project / rel)
+    return {'files': len(changed), 'lines': lines}
+
+
+def reset_baseline(run: Path) -> None:
+    """Remember the source state a task starts from, so later edits can be measured against it."""
+    cfg = json.loads((run / 'runtime.json').read_text())
+    project = cfg.get('verificationProject', cfg['project'])
+    if project is not None:
+        dump(run / 'baseline.json', file_hashes(Path(project)))
 
 
 def run_fingerprint(run: Path) -> dict:
@@ -119,7 +177,14 @@ def run_fingerprint(run: Path) -> dict:
     project = cfg.get('verificationProject', cfg['project'])
     if project is None:
         return {'sha256': None, 'sourceFiles': 0, 'scopeRequired': True, 'project': None}
-    return {**fingerprint(Path(project)), 'scopeRequired': False, 'project': project}
+    baseline = None
+    if (run / 'baseline.json').exists():
+        try:
+            baseline = json.loads((run / 'baseline.json').read_text())
+        except ValueError:
+            baseline = None
+    return {**fingerprint(Path(project)), 'scopeRequired': False, 'project': project,
+            'size': change_size(Path(project), baseline)}
 
 
 def select_project(run: Path, project: Path) -> dict:
@@ -137,6 +202,7 @@ def select_project(run: Path, project: Path) -> dict:
     result = fingerprint(project)
     cfg['verificationProject'] = str(project)
     dump(run / 'runtime.json', cfg)
+    reset_baseline(run)
     return {**result, 'scopeRequired': False, 'project': str(project)}
 
 
@@ -323,7 +389,10 @@ def settings(run: Path, home: bool = False, full_tools: bool = False) -> dict:
     plugins = {k: v for k, v in original.get('enabledPlugins', {}).items() if k.split('@')[0] not in off and k not in off}
     # Effort comes from modelSettings only (no top-level effortLevel); xhigh needs /lab-model opus or /effort.
     # The per-agent cacheTtl (implementer 1h, investigator 5m) applies only while subagentPromptCacheTtl is unset.
-    out.update({'model': SONNET, 'advisorModel': 'opus',
+    # No advisor model by default: it would be one more Opus path the lead can take on its own. Opt in with
+    # CLAUDE_LAB_ADVISOR_MODEL=opus. Opus runs only for the reviewer and reasoner agents you invoke.
+    advisor = os.environ.get('CLAUDE_LAB_ADVISOR_MODEL', '').strip()
+    out.update({'model': SONNET, **({'advisorModel': advisor} if advisor else {}),
                 'modelSettings': {SONNET: {'effortLevel': 'medium'},
                                   OPUS: {'effortLevel': 'high'}},
                 'ultracode': False, 'disableWorkflows': True,
@@ -376,8 +445,10 @@ def prepare(project: Path, mode: str, model: str, run: Path | None = None, full_
               'compactionPolicy': COMPACT_WINDOW, 'fullTools': full_tools,
               'financialTerms': _env_list('CLAUDE_LAB_FINANCIAL_TERMS'), 'mcporterBlock': _env_list('CLAUDE_LAB_MCPORTER_BLOCK'),
               'sonnetModel': SONNET, 'opusModel': OPUS,
+              'fastPath': {'files': _env_int('CLAUDE_LAB_SMALL_FILES', 3), 'lines': _env_int('CLAUDE_LAB_SMALL_LINES', 80)},
               'createdAt': datetime.now(timezone.utc).isoformat()}
     dump(run / 'runtime.json', config)
+    reset_baseline(run)
     dump(run / 'settings.json', settings(run, home_workspace, full_tools))
     dump(run / 'source-hashes.json', hashes())
     for name in ['brief.md', 'context.md', 'plan.md', 'implementation.md', 'verification.md']:
@@ -538,6 +609,7 @@ def main() -> int:
     parser.add_argument('--mode', choices=MODES, default='balanced')
     parser.add_argument('--model', choices=['auto', 'sonnet', 'opus'], default='auto')
     parser.add_argument('--run', type=Path)
+    parser.add_argument('--reset-baseline', action='store_true', help='fingerprint: start measuring change size from the current source')
     parser.add_argument('--resume', type=Path)
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--quality',type=int,choices=range(6))
@@ -559,6 +631,8 @@ def main() -> int:
     if opt.command == 'auth':
         print(json.dumps(auth_command(opt.text or 'status'), indent=2)); return 0
     if opt.command == 'fingerprint':
+        if opt.run and opt.reset_baseline:
+            reset_baseline(opt.run)
         print(json.dumps(run_fingerprint(opt.run) if opt.run else fingerprint(opt.project))); return 0
     if opt.command == 'scope':
         if not opt.run: parser.error('scope requires --run')

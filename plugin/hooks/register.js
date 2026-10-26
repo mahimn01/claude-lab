@@ -19,8 +19,16 @@ export function configure(config = {}) {
   blockedServers = (config.mcporterBlock || []).filter(Boolean).map(String);
   SONNET = config.sonnetModel || 'claude-sonnet-5-5';
   OPUS = config.opusModel || 'claude-opus-5-5';
+  const files = Number(config.fastPath?.files), lines = Number(config.fastPath?.lines);
+  FAST = {files:Number.isInteger(files) && files >= 0 ? files : 3, lines:Number.isInteger(lines) && lines >= 0 ? lines : 80};
 }
 const isFinancial = (text) => FINANCIAL.test(text) || Boolean(extraFinancial && extraFinancial.test(text));
+// Small-change fast path: a non-financial, non-risky task whose edits stay within these bounds (measured by the
+// launcher against the source state the task started from) finishes without a checkpoint, a verify run or a
+// reviewer. Anything larger, risky, financial or of unknown size keeps the full evidence and review gate.
+// Override with CLAUDE_LAB_SMALL_FILES and CLAUDE_LAB_SMALL_LINES (copied into runtime.json as fastPath).
+let FAST = {files:3, lines:80};
+const RISKY = /\b(security|vulnerabilit\w*|cryptograph\w*|encrypt\w*|authenticat\w*|authoriz\w*|credentials?|secrets?|race condition|deadlock|data migration|schema migration|database migration|production deploy\w*)\b/i;
 const HARD = /\b(architect(?:ure|ural)?|cross[- ]file|security|vulnerabilit\w*|cryptograph\w*|proof|prove|theorem|mathematical|race condition|deadlock|root cause|ambiguous|hard debugging|independent review|critical review)\b/i;
 const OPUS_ROLE = /^(?:harness-lab:(?:reviewer|reasoner)|staff-reviewer)$/;
 const REVIEW_ROLE = /^(?:harness-lab:reviewer|staff-reviewer)$/;
@@ -34,17 +42,20 @@ export function redact(text) {
 
 // Routes the lead on the user's own words. Sonnet is the default; hard questions get a
 // reasoner hint instead of a model switch, and financial work adds a mandatory Opus review.
-export function route(text, override = 'auto', financialTask = false) {
+export function route(text, override = 'auto', financialTask = false, riskyTask = false) {
   const financial = financialTask || isFinancial(text);
+  const risky = riskyTask || RISKY.test(text);
   const hard = HARD.test(text);
-  if (override === 'opus') return {model: OPUS, effort: 'xhigh', reason: 'user override', financial, hard};
-  if (financial) return {model: SONNET, effort: 'high', reason: 'financial task; Opus review required', financial, hard};
-  const reason = override === 'sonnet' ? 'user override' : hard ? 'hard question; spawn harness-lab:reasoner for it' : 'default route';
-  return {model: SONNET, effort: 'medium', reason, financial, hard};
+  if (override === 'opus') return {model: OPUS, effort: 'xhigh', reason: 'user override', financial, hard, risky};
+  if (financial) return {model: SONNET, effort: 'high', reason: 'financial task; Opus review required', financial, hard, risky};
+  const reason = override === 'sonnet' ? 'user override' : hard ? 'looks hard; reasoner only if your own attempt leaves a specific question open' : risky ? 'security-sensitive; independent review required' : 'default route';
+  return {model: SONNET, effort: 'medium', reason, financial, hard, risky};
 }
 
-// The router picks every worker's model (agent files carry no model line): Opus only for
-// review and hard reasoning, Sonnet for the rest; an explicit Haiku or Sonnet request is kept.
+// The router picks every worker's model. Opus only for the reviewer and reasoner agents, Sonnet for the rest;
+// an explicit Haiku or Sonnet request is kept. The agent files also carry a model line (sonnet for implementer and
+// investigator, opus for reasoner and reviewer) so the pin survives a missing hook or env var; this hook is what
+// stops a lead's own `model: opus` argument from overriding it, since an Agent call's argument outranks both.
 export function spawnModel(type = '', requested = '') {
   if (OPUS_ROLE.test(type)) return OPUS;
   if (/haiku|sonnet/i.test(requested)) return requested;
@@ -72,8 +83,18 @@ export function budgetWarnings(state) {
   return warnings;
 }
 
+// True when the edits so far are within the fast-path bounds and nothing about the task is financial or risky.
+// Unknown size (no baseline, too many files, home session without a scope) is never small.
+export function smallChange(state) {
+  const size = state.changeSize;
+  if (state.route?.financial || state.route?.risky || state.scopeRequired || !size) return false;
+  return Number.isFinite(size.files) && Number.isFinite(size.lines) && size.files <= FAST.files && size.lines <= FAST.lines;
+}
+
 export function evidenceComplete(state, checks) {
-  if (!state.checkpoint || state.unresolved?.length) return false;
+  if (state.unresolved?.length) return false;
+  if (smallChange(state)) return true;
+  if (!state.checkpoint) return false;
   if (state.route?.financial && !state.review?.approved) return false;
   if (!state.codeEdited) return true;
   if (state.scopeRequired) return false;
@@ -160,6 +181,7 @@ let lock = Promise.resolve();
     const current = scope.sha256;
     await change($, () => {
       state.scopeRequired = Boolean(scope.scopeRequired);
+      state.changeSize = scope.size || null;
       if (scope.project !== undefined) state.verificationProject = scope.project;
       if (state.workspaceFingerprint !== current) {
         state.workspaceFingerprint = current;
@@ -291,7 +313,7 @@ export function register(on) {
       const chosen = await change($, async () => {
         // Route on the user's words only; project paths are not task signals.
         const previous = state.route?.pinned ? state.route : null;
-        const decision = route(e.text, cfg.modelOverride, Boolean(state.route?.financial));
+        const decision = route(e.text, cfg.modelOverride, Boolean(state.route?.financial), Boolean(state.route?.risky));
         // The lead model is pinned for the task: switching it mid-session rebuilds the prompt cache.
         // Effort may follow the prompt, because 5.5 models keep the cache across effort changes.
         state.route = previous && previous.model !== decision.model
@@ -311,12 +333,14 @@ export function register(on) {
         if (overBudget) state.budgetAlerted = budgetKey;
         return {...state.route, hard, injectPolicy, hint:takeHint(), overBudget};
       });
-      let context = `Claude Lab: ${chosen.model}, ${chosen.effort}; ${chosen.reason}. Task artifacts: ${run}. Use compact checkpoints and evidence, not another transcript. ${status()}.`;
+      let context = `Claude Lab: ${chosen.model}, ${chosen.effort}; ${chosen.reason}. Task artifacts: ${run}. ${status()}.`;
+      context += `\nSmall-change fast path: if this is a small, ordinary change (at most ${FAST.files} files and ${FAST.lines} changed lines, nothing financial or security-sensitive), do it yourself in the lead: read, edit, run the project's own tests, report. Do not spawn workers or a reviewer, and do not record a checkpoint or call verify; the lab will not ask for them. For anything larger or riskier, use the checkpoint, verify and independent reviewer flow.`;
       context += '\nSoft budget for this task (replaces any earlier "no budget" instruction): at most 4 workers, one independent review plus at most one re-review after fixes, and stop to ask the user once the lab status shows more than 2M tokens on this task. The lead model stays fixed for the task. Multi-step data or bulk output → harness-lab:code-first-data skill; return summaries, not dumps.';
       if (chosen.overBudget) context += '\nSOFT BUDGET EXCEEDED (see status). Before more work, tell the user the usage so far and ask whether to continue; if they already said continue, carry on.';
-      if (chosen.hard) context += '\nThis looks like a hard question. Keep the lead model; spawn harness-lab:reasoner once with the specific question and the evidence.';
+      if (chosen.hard) context += '\nThis may be a hard question. Keep the lead model and try it yourself first; spawn harness-lab:reasoner (Opus) once, with the specific question and the evidence, only if your own attempt leaves something unresolved.';
       if (chosen.hint) context += '\n' + hintText(chosen.hint);
       if (cfg.homeWorkspace && state.scopeRequired) context += '\nHome-directory session: browse normally. Before coding, select the specific work folder with mcp__harness-lab__select_project. No entire-home source scan is performed; unscoped research completion records a checkpoint only.';
+      if (chosen.risky && !chosen.financial) context += '\nSecurity-sensitive task: the small-change fast path does not apply. Before finishing, record the checkpoint, run verify and obtain one independent harness-lab:reviewer review.';
       if (chosen.financial) context += '\nFinancial or broker task: before finishing, obtain one independent harness-lab:reviewer (Opus) review of the analysis or change.';
       if (chosen.injectPolicy) context += '\nSCOPED FINANCIAL POLICY:\n' + await $.fs.read(run + '/financial-policy.md');
       $.ui.log(`Route: ${chosen.model} (${chosen.reason}).`);
@@ -481,7 +505,9 @@ export function register(on) {
     const chatOnly = !state.mainToolCalls && !state.workers && !state.codeEdited && !state.route?.financial;
     if (!complete && !state.stopNudged && !chatOnly) {
       const hint = await change($, () => {state.stopNudged = true; return takeHint();});
-      return {block:'Before finishing, record the compact checkpoint. For code edits, run meaningful acceptance checks through the lab verify tool and obtain independent reviewer approval for the latest revision. Financial tasks need one approved harness-lab:reviewer review. ' +
+      const size = state.changeSize && Number.isFinite(state.changeSize.lines) ? `${state.changeSize.files} file(s), ${state.changeSize.lines} changed line(s)` : 'unmeasured size';
+      const why = state.route?.financial ? 'this is a financial task' : state.route?.risky ? 'this is security-sensitive' : state.scopeRequired ? 'no code folder is selected' : (state.changeSize && Number.isFinite(state.changeSize.lines) ? `the change (${size}) is above the small-change limit of ${FAST.files} files and ${FAST.lines} lines` : 'the size of the change could not be measured');
+      return {block:`Before finishing: ${why}, so the full handoff applies. Record the compact checkpoint. For code edits, run meaningful acceptance checks through the lab verify tool and obtain independent harness-lab:reviewer approval for the latest revision. Financial tasks need one approved harness-lab:reviewer review. ` +
         (hint ? hintText(hint) + ' ' : '') + 'If blocked, record the missing evidence and clearly report incomplete work. This reminder fires once.'};
     }
     await change($, () => {state.evidenceComplete = complete;});
@@ -489,7 +515,7 @@ export function register(on) {
       const usage = await $.session.usage();
       await change($, () => {state.planLatest = usage.rateLimits;});
     } catch { /* Local model accounting remains available when plan bars fail. */ }
-    $.ui.log(status() + ' · evidence ' + (complete ? (state.scopeRequired ? 'checkpoint recorded; code verification unscoped' : 'complete') : 'incomplete'));
+    $.ui.log(status() + ' · evidence ' + (complete ? (smallChange(state) ? 'small change (fast path)' : state.scopeRequired ? 'checkpoint recorded; code verification unscoped' : 'complete') : 'incomplete'));
     return next(e);
   }).catch(() => ({block:'Lab evidence could not be checked. Report incomplete verification; inspect the lab runtime before claiming completion.'}));
 
@@ -504,7 +530,7 @@ export function register(on) {
       await $.fs.write(run + '/runtime.json',JSON.stringify(cfg,null,2));
       const {pinned, switched} = await change($, () => {
         if (when === 'now' && state.route) {
-          state.route = {...route('',choice,state.route.financial),pinned:true};
+          state.route = {...route('',choice,state.route.financial,state.route.risky),pinned:true};
           return {switched:true};
         }
         return {pinned:state.route?.pinned ? state.route.model : null};
@@ -524,6 +550,8 @@ export function register(on) {
           codeEdited:false,verification:null,review:null,route:null,stopNudged:false,checkpoint:false,runtimeReady:true,workspaceFingerprint:state.workspaceFingerprint,
           scopeRequired:state.scopeRequired,verificationProject:state.verificationProject};
         await $.fs.write(run + '/acceptance.json',JSON.stringify({criteria:[],checks:[]}));
+        // Size is measured from the source as it is now, so the next task gets its own small-change allowance.
+        try { await $.process.run(['python3',root + '/bin/lab.py','fingerprint','--run',run,'--reset-baseline'],{timeoutMs:10000}); } catch { /* A missing baseline only disables the fast path. */ }
       });
       return {text:'New task handoff ready. Use /clear before an unrelated task, then submit its request. Previous metrics are archived; the soft budget (4 workers, one review plus one re-review, ask at 2M tokens) starts again.'};
     }

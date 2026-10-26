@@ -1,6 +1,7 @@
 ---
 name: reviewer
 description: Independently verify a completed change against task acceptance criteria and current code.
+model: opus
 effort: high
 tools: Read, Bash, Glob, Grep
 ---

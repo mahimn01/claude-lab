@@ -8,7 +8,7 @@
 
 Why you might want it:
 
-- **Smaller, cheaper by default.** A 300k context cap, Sonnet as the lead model with Opus kept for review and hard reasoning, capped tool output, and fewer idle tools in the prompt.
+- **Smaller, cheaper by default.** A 300k context cap, Sonnet as the lead model with Opus kept for the reviewer and reasoner agents you invoke on larger or riskier work, capped tool output, and fewer idle tools in the prompt.
 - **See where your tokens go.** A status line shows context size and prompt-cache time left; `lab-usage-scan` reads your own transcripts and shows which tools and models use the most.
 - **Opt-in and reversible.** It is a thin launcher. It does not patch Claude Code and does not edit your Claude settings. Plain `claude` keeps working exactly as before; only sessions started with `claude-lab` get the tuned setup.
 
@@ -85,18 +85,18 @@ Plain `claude` never goes through any of this. There is also an optional tmux an
 | Optimization | What it does | Why it saves tokens or money |
 |---|---|---|
 | Context cap and compaction | Starts Claude with `--autocompact 300k` | Every message re-reads the whole context. A smaller ceiling means each call re-reads less, and compaction runs before the context gets huge. A window you set yourself (`CLAUDE_CODE_AUTO_COMPACT_WINDOW`) wins. |
-| Sonnet by default, Opus on purpose | Lead model is Sonnet. Opus is used for the `reviewer` and `reasoner` agents and as the `advisorModel` | Sonnet costs much less per token. Opus is spent only where a second, stronger opinion matters. The lead model is fixed for a task, because switching models in a session rebuilds the prompt cache. |
+| Sonnet by default, Opus on purpose | Lead model is Sonnet. Opus is used only by the `reviewer` and `reasoner` agents, when the lead spawns them. There is no default `advisorModel` (opt in with `CLAUDE_LAB_ADVISOR_MODEL=opus`) | Sonnet costs much less per token. Opus is spent only where a second, stronger opinion matters. The lead model is fixed for a task, because switching models in a session rebuilds the prompt cache. |
 | Effort routing | `modelSettings`: Sonnet at medium effort, Opus at high | Less hidden thinking on routine work. |
-| Subagent limits | Subagents run on Sonnet. Spawn depth 1, no forked history, at most 4 at once | Subagents each carry their own context. Limiting depth, count and history stops cost multiplying. |
+| Subagent limits | `implementer` and `investigator` pin `model: sonnet` in their own files, and the plugin hook overrides any `model` argument the lead passes. `CLAUDE_CODE_SUBAGENT_MODEL` is also set, but since Claude Code 2.1.251 it is only a default, so it is not relied on. Spawn depth 1, no forked history, at most 4 at once | Subagents each carry their own context. Limiting depth, count and history stops cost multiplying. |
 | Cap on tool output | `MAX_MCP_OUTPUT_TOKENS=8000`, `bashOutputMaxChars=15000` | Huge tool results sit in the context for the rest of the session. A cap keeps them small. |
 | Fewer tools and skills in the prompt | 15 rarely used built-in tools are hidden; 23 skills become "user-invocable-only" (still available as `/name`) | Tool and skill descriptions are sent on every request. The source notes one of the hidden tools alone cost about 10k tokens per interactive request. `--full-tools` turns this off. |
 | No background surprises | Auto-updater off, memory writes off, prompt suggestions off, goal check-ins off, cron/wakeup/remote-trigger tools hidden | Removes model calls you did not ask for. |
 | Quiet sessions | Only the safety hooks you name are carried over (`CLAUDE_LAB_KEEP_HOOKS`); noisy plugins can be left out (`CLAUDE_LAB_DISABLE_PLUGINS`) | Less startup text and fewer injected messages. |
 | Status line | Shows context size, prompt-cache time left, compactions and plan usage, with plain-word warnings | The costly moments are a cache miss (the whole context is re-sent at full price) and a bloated or repeatedly compacted context. The bar tells you when to start fresh. It never pings the model to keep the cache warm. |
-| Plugin agents | `implementer` (Sonnet, medium effort), `investigator` (low effort, no project notes), `reviewer` and `reasoner` (Opus, high effort) | Each job gets the cheapest setup that fits it. Reviews come from a separate agent that did not write the code. |
-| Task workflow and budget | A short workflow prompt: work small tasks directly; for big ones use at most 4 workers, 1 review plus 1 re-review, and stop to ask at about 2M tokens | A soft budget. It guides and never blocks. |
+| Plugin agents | `implementer` (Sonnet, medium effort), `investigator` (low effort, no project notes), `reviewer` and `reasoner` (Opus, high effort, spawned only on the full-handoff path or for a hard question) | Each job gets the cheapest setup that fits it. Reviews come from a separate agent that did not write the code. |
+| Task workflow and budget | A short workflow prompt with a small-change fast path: a change of at most 3 source files and about 80 changed lines that is not financial or security-sensitive is done by the lead alone, with no checkpoint, worker or reviewer. Larger or riskier work uses at most 4 workers, 1 review plus 1 re-review, and stops to ask at about 2M tokens | The budget is soft. It guides and never blocks. The limits are `CLAUDE_LAB_SMALL_FILES` and `CLAUDE_LAB_SMALL_LINES`. The size is measured against the source as it was when the task started; when it cannot be measured the full handoff applies. The trade-off: on the fast path the lab records no verification evidence, so the lead's own test run is the only check. |
 | Handoff files | A checkpoint tool writes brief, plan, context and verification notes outside your project | At a task boundary you start fresh and read about 6000 characters of notes instead of dragging the whole conversation along. |
-| Checked results | Acceptance checks run as plain argument lists (no shell, an allowed-program list, 60 second timeout), keyed to a fingerprint of your source. Code changes need an independent reviewer approval | Fewer "it works" claims that do not hold, which means fewer expensive correction rounds. |
+| Checked results | Acceptance checks run as plain argument lists (no shell, an allowed-program list, 60 second timeout), keyed to a fingerprint of your source. Code changes above the small-change limit, and all financial or security-sensitive work, need an independent reviewer approval | Fewer "it works" claims that do not hold, which means fewer expensive correction rounds. |
 | Guarded data work | A `code-first-data` skill tells Claude to process bulk data with a script and return a summary | Raw dumps in the context are the most common token sink. |
 | Usage scan | `lab-usage-scan` reads your own Claude transcripts and reports model split and which tools produce the most output | Shows where your tokens really go, so you can change habits or settings. |
 | Account fallback (optional) | If you configure a second login, a supervisor can switch accounts at an idle moment when the first hits its limit | Keeps long work moving. Off unless you run `claude-lab auth fallback`. |
@@ -166,7 +166,7 @@ every permission rule from your own settings and add to them: they never remove 
 
 The bundled plugin (`plugin/`, named `harness-lab`) adds the four agents, a rule-based router, the task
 budget, the checks and the data skill. The router is plain code, not a model: Sonnet by default, a hint to
-use the `reasoner` only when the wording of the task is clearly hard. Tasks that look financial (brokerage,
+try the `reasoner` only when the wording of the task looks hard and your own attempt leaves a question open. Tasks that look financial (brokerage,
 orders, options and similar, plus any terms you add) are routed to higher effort, get a scoped policy text and
 need a review. This is a guard rail, not a guarantee.
 

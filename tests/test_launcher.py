@@ -252,7 +252,7 @@ class LauncherTest(unittest.TestCase):
             out=lab.settings(self.run)
         self.assertEqual(json.loads(fake.read_text()),original)
         self.assertEqual(out['model'],'claude-sonnet-5-5')
-        self.assertEqual(out['advisorModel'],'opus')
+        self.assertNotIn('advisorModel',out)
         self.assertEqual(out['modelSettings'],{'claude-sonnet-5-5':{'effortLevel':'medium'},'claude-opus-5-5':{'effortLevel':'high'}})
         self.assertNotIn('effortLevel',out)
         self.assertNotIn('subagentPromptCacheTtl',out)

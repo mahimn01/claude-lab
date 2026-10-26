@@ -1,5 +1,5 @@
 import {expect, mock, test} from 'claude-code/testing';
-import {route, evidenceComplete, redact, exhaustedWindows, spawnModel, usageSummary, budgetWarnings, mcporterDenial, configure} from '../hooks/register.js';
+import {route, evidenceComplete, smallChange, redact, exhaustedWindows, spawnModel, usageSummary, budgetWarnings, mcporterDenial, configure} from '../hooks/register.js';
 
 function fixture(on, overrides = {}, config = {}, env = {}) {
   const f = {files:new Map(), models:[], efforts:[], calls:[], hash:'source-a', spawns:0, spawnModels:[]};
@@ -31,7 +31,7 @@ function fixture(on, overrides = {}, config = {}, env = {}) {
       f.files.set('/lab/run/runtime.json',JSON.stringify(cfg));
     }
     const unscoped=cfg.homeWorkspace && !cfg.verificationProject;
-    return {value:{exitCode:0,stdout:JSON.stringify({sha256:unscoped ? null : f.hash,sourceFiles:unscoped ? 0 : 2,scopeRequired:unscoped,project:cfg.verificationProject || (unscoped ? null : cfg.project)}),stderr:''}};
+    return {value:{exitCode:0,stdout:JSON.stringify({sha256:unscoped ? null : f.hash,sourceFiles:unscoped ? 0 : 2,scopeRequired:unscoped,project:cfg.verificationProject || (unscoped ? null : cfg.project),...(f.size !== undefined && !unscoped ? {size:f.size} : {})}),stderr:''}};
   });
   on('turn.step',async function* ($,e) {
     f.models.push(e.model);f.efforts.push(e.effort);
@@ -101,10 +101,10 @@ test('the lead stays on Sonnet across prompts; a hard prompt adds a reasoner hin
   await prompt($,'Update the documentation');await step($,undefined,2);
   expect(f.models).toEqual([SONNET,SONNET,SONNET]);
   expect(f.efforts).toEqual(['medium','medium','medium']);
-  expect(hard.context.join('\n').includes('spawn harness-lab:reasoner once')).toBe(true);
+  expect(hard.context.join('\n').includes('spawn harness-lab:reasoner (Opus) once')).toBe(true);
   expect(hard.context.join('\n').includes('usage counters never stop work')).toBe(false);
   const again=await prompt($,'Now find the root cause of the deadlock');
-  expect(again.context.join('\n').includes('spawn harness-lab:reasoner once')).toBe(false);
+  expect(again.context.join('\n').includes('spawn harness-lab:reasoner (Opus) once')).toBe(false);
 });
 
 test('routing ignores the project path, so a repository with a trading-style name is not a financial task',async ($,on) => {
@@ -462,4 +462,65 @@ test('worker completion retains main quota evidence and clear invalidates the pr
   await $.session.end({reason:'clear'});
   const control=JSON.parse(f.files.get('/lab/run/auth-control.json'));
   expect(control.phase).toBe('pending');expect(control.hasMainTurn).toBe(false);
+});
+
+test('small-change fast path: bounds, risk and unknown size decide whether the full gate applies',async () => {
+  const edited={codeEdited:true,revision:1,taskSerial:0,workspaceFingerprint:'now',route:{financial:false,risky:false}};
+  expect(smallChange({...edited,changeSize:{files:1,lines:12}})).toBe(true);
+  expect(smallChange({...edited,changeSize:{files:3,lines:80}})).toBe(true);
+  expect(smallChange({...edited,changeSize:{files:4,lines:10}})).toBe(false);
+  expect(smallChange({...edited,changeSize:{files:1,lines:81}})).toBe(false);
+  expect(smallChange({...edited,changeSize:{files:30,lines:null}})).toBe(false);
+  expect(smallChange({...edited})).toBe(false);
+  expect(smallChange({...edited,changeSize:{files:1,lines:5},scopeRequired:true})).toBe(false);
+  expect(smallChange({...edited,changeSize:{files:1,lines:5},route:{financial:true}})).toBe(false);
+  expect(smallChange({...edited,changeSize:{files:1,lines:5},route:{risky:true}})).toBe(false);
+  // A small edit needs no checkpoint, checker run or review; an unresolved item still blocks.
+  expect(evidenceComplete({...edited,changeSize:{files:1,lines:12}},null)).toBe(true);
+  expect(evidenceComplete({...edited,changeSize:{files:1,lines:12},unresolved:['open']},null)).toBe(false);
+  // Above the limit the old evidence rules apply unchanged.
+  expect(evidenceComplete({...edited,changeSize:{files:5,lines:200},checkpoint:true},{passed:true,revision:1,taskSerial:0,workspaceFingerprint:'now'})).toBe(false);
+  expect(evidenceComplete({...edited,changeSize:{files:5,lines:200},checkpoint:true,review:{approved:true,revision:1,workspaceFingerprint:'now'}},
+    {passed:true,revision:1,taskSerial:0,workspaceFingerprint:'now'})).toBe(true);
+});
+
+test('a small edit finishes without a reminder; a larger one, or a security-sensitive one, still needs the review',async ($,on) => {
+  const stopEvent={session_id:'s',transcript_path:'/t',cwd:'/project',hook_event_name:'Stop',stop_hook_active:false,last_assistant_message:'Done'};
+  const f=fixture(on);f.size={files:1,lines:9};await start($);await prompt($,'Fix the off-by-one in the pager');
+  expect((await prompt($,'and add a test')).context.join('\n').includes('Small-change fast path')).toBe(true);
+  f.hash='edited-small';
+  expect((await $.classic.Stop(stopEvent)).block).toBe(undefined);
+  const state=JSON.parse(f.files.get('/lab/run/metrics.json'));
+  expect(state.codeEdited).toBe(true);expect(state.evidenceComplete).toBe(true);expect(state.reviews || 0).toBe(0);
+  f.size={files:6,lines:240};f.hash='edited-large';
+  const large=await $.classic.Stop(stopEvent);
+  expect(large.block.includes('above the small-change limit')).toBe(true);
+  expect(large.block.includes('harness-lab:reviewer')).toBe(true);
+});
+
+test('security-sensitive prompts never take the fast path, even for a tiny edit',async ($,on) => {
+  const f=fixture(on);f.size={files:1,lines:3};await start($);
+  const risky=await prompt($,'Harden the authentication check in login');
+  expect(risky.context.join('\n').includes('Security-sensitive task')).toBe(true);
+  f.hash='edited';
+  const stop=await $.classic.Stop({session_id:'s',transcript_path:'/t',cwd:'/project',hook_event_name:'Stop',stop_hook_active:false,last_assistant_message:'Done'});
+  expect(stop.block.includes('security-sensitive')).toBe(true);
+  expect(JSON.parse(f.files.get('/lab/run/metrics.json')).route.risky).toBe(true);
+  expect(route('Fix the CSS spacing').risky).toBe(false);
+});
+
+test('financial work keeps the mandatory approved review even when the edit is tiny',async ($,on) => {
+  const f=fixture(on);f.size={files:1,lines:2};await start($);await prompt($,'Adjust the IBKR stop order sizing');f.hash='edited';
+  const stop=await $.classic.Stop({session_id:'s',transcript_path:'/t',cwd:'/project',hook_event_name:'Stop',stop_hook_active:false,last_assistant_message:'Done'});
+  expect(stop.block.includes('financial task')).toBe(true);
+});
+
+test('the fast-path limits can be tuned through runtime.json',async ($,on) => {
+  const f=fixture(on,{},{fastPath:{files:1,lines:10}});f.size={files:2,lines:5};await start($);
+  const p=await prompt($,'Tidy the helper');
+  expect(p.context.join('\n').includes('at most 1 files and 10 changed lines')).toBe(true);
+  f.hash='edited';
+  const stop=await $.classic.Stop({session_id:'s',transcript_path:'/t',cwd:'/project',hook_event_name:'Stop',stop_hook_active:false,last_assistant_message:'Done'});
+  expect(stop.block.includes('small-change limit of 1 files and 10 lines')).toBe(true);
+  configure({});
 });

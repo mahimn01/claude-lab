@@ -1,6 +1,7 @@
 ---
 name: implementer
 description: Implement a defined change in explicitly assigned files and report verification evidence.
+model: sonnet
 effort: medium
 maxTurns: 40
 autoCompactWindow: 200000
