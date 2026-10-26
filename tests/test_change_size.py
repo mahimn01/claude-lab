@@ -85,7 +85,8 @@ class HelperModelPinTest(unittest.TestCase):
         self.assertEqual(frontmatter('implementer')['model'], 'sonnet')
         self.assertEqual(frontmatter('investigator')['model'], 'sonnet')
         self.assertEqual(frontmatter('reasoner')['model'], 'opus')
-        self.assertEqual(frontmatter('reviewer')['model'], 'opus')
+        self.assertEqual(frontmatter('reviewer')['model'], 'sonnet')
+        self.assertEqual(frontmatter('opus-reviewer')['model'], 'opus')
 
     def test_no_advisor_model_unless_opted_in(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(lab, 'SOURCE', Path(tmp) / 'none.json'):

@@ -32,15 +32,15 @@ outside the repository. Read these for a stage handoff instead of rerunning disc
 
 Run the recorded acceptance checks with the lab verify tool. It invokes the usual Bash permission
 guards, then records real exit codes and a fingerprint of current source. Then use one independent
-reviewer (Opus). Fix material findings, repeat affected checks and review the final revision. Changes
+reviewer (`harness-lab:reviewer`, Sonnet). For financial or security-sensitive work use `harness-lab:opus-reviewer` (Opus) instead (the lab also upgrades `harness-lab:reviewer` to Opus on those tasks), and use it whenever the user or you explicitly want an Opus review. Fix material findings, repeat affected checks and review the final revision. Changes
 through Bash also invalidate evidence when the source fingerprint changes. If a task started small and
 grows past the limit, switch to this path before you finish.
 
 ## Models
 
-The investigator and implementer run on Sonnet. The reviewer and reasoner run on Opus, so spawn them
-only when this path calls for it. Do not pass a `model` argument to override a specialist; the lab
-ignores an Opus request for the investigator or implementer.
+The investigator, implementer and ordinary reviewer run on Sonnet. The reasoner and the opus-reviewer run
+on Opus, so spawn them only when this path calls for it. Do not pass a `model` argument to override a specialist; the lab
+ignores an Opus request for the investigator or implementer (to get an Opus review, spawn the opus-reviewer).
 
 When an investigation is hard or its result is uncertain after your own attempt, escalate that specific
 question to the reasoner once with collected evidence. Keep ordinary implementation on Sonnet. The lead keeps one

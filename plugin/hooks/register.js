@@ -30,8 +30,10 @@ const isFinancial = (text) => FINANCIAL.test(text) || Boolean(extraFinancial && 
 let FAST = {files:3, lines:80};
 const RISKY = /\b(security|vulnerabilit\w*|cryptograph\w*|encrypt\w*|authenticat\w*|authoriz\w*|credentials?|secrets?|race condition|deadlock|data migration|schema migration|database migration|production deploy\w*)\b/i;
 const HARD = /\b(architect(?:ure|ural)?|cross[- ]file|security|vulnerabilit\w*|cryptograph\w*|proof|prove|theorem|mathematical|race condition|deadlock|root cause|ambiguous|hard debugging|independent review|critical review)\b/i;
-const OPUS_ROLE = /^(?:harness-lab:(?:reviewer|reasoner)|staff-reviewer)$/;
-const REVIEW_ROLE = /^(?:harness-lab:reviewer|staff-reviewer)$/;
+// Opus roles: the reasoner, the Opus reviewer and the external staff reviewer. The ordinary harness-lab:reviewer is Sonnet;
+// spawnModel() raises it to Opus only for financial or security-sensitive tasks, or when the lead asks for Opus explicitly.
+const OPUS_ROLE = /^(?:harness-lab:(?:opus-reviewer|reasoner)|staff-reviewer)$/;
+const REVIEW_ROLE = /^(?:harness-lab:(?:opus-)?reviewer|staff-reviewer)$/;
 const SOFT_BUDGET = {workers:4, reviews:2, tokens:2e6};
 const TOKEN_KEYS = ['input_tokens','output_tokens','cache_creation_input_tokens'];
 const EFFORTS = ['low','medium','high','xhigh','max'];
@@ -52,12 +54,15 @@ export function route(text, override = 'auto', financialTask = false, riskyTask 
   return {model: SONNET, effort: 'medium', reason, financial, hard, risky};
 }
 
-// The router picks every worker's model. Opus only for the reviewer and reasoner agents, Sonnet for the rest;
-// an explicit Haiku or Sonnet request is kept. The agent files also carry a model line (sonnet for implementer and
-// investigator, opus for reasoner and reviewer) so the pin survives a missing hook or env var; this hook is what
-// stops a lead's own `model: opus` argument from overriding it, since an Agent call's argument outranks both.
-export function spawnModel(type = '', requested = '') {
+// The router picks every worker's model. Opus only for the reasoner and Opus reviewer agents, and for the ordinary
+// reviewer on a financial or security-sensitive task or when the lead explicitly asks for Opus; Sonnet for the rest.
+// An explicit Haiku or Sonnet request is kept. The agent files also carry a model line (sonnet for implementer,
+// investigator and reviewer; opus for reasoner and opus-reviewer) so the pin survives a missing hook or env var; this
+// hook is what stops a lead's own `model: opus` argument from overriding the implementer or investigator, since an
+// Agent call's argument outranks both.
+export function spawnModel(type = '', requested = '', route = {}) {
   if (OPUS_ROLE.test(type)) return OPUS;
+  if (type === 'harness-lab:reviewer' && (route.financial || route.risky || /opus/i.test(requested))) return OPUS;
   if (/haiku|sonnet/i.test(requested)) return requested;
   return SONNET;
 }
@@ -340,8 +345,8 @@ export function register(on) {
       if (chosen.hard) context += '\nThis may be a hard question. Keep the lead model and try it yourself first; spawn harness-lab:reasoner (Opus) once, with the specific question and the evidence, only if your own attempt leaves something unresolved.';
       if (chosen.hint) context += '\n' + hintText(chosen.hint);
       if (cfg.homeWorkspace && state.scopeRequired) context += '\nHome-directory session: browse normally. Before coding, select the specific work folder with mcp__harness-lab__select_project. No entire-home source scan is performed; unscoped research completion records a checkpoint only.';
-      if (chosen.risky && !chosen.financial) context += '\nSecurity-sensitive task: the small-change fast path does not apply. Before finishing, record the checkpoint, run verify and obtain one independent harness-lab:reviewer review.';
-      if (chosen.financial) context += '\nFinancial or broker task: before finishing, obtain one independent harness-lab:reviewer (Opus) review of the analysis or change.';
+      if (chosen.risky && !chosen.financial) context += '\nSecurity-sensitive task: the small-change fast path does not apply. Before finishing, record the checkpoint, run verify and obtain one independent harness-lab:opus-reviewer (Opus) review.';
+      if (chosen.financial) context += '\nFinancial or broker task: before finishing, obtain one independent harness-lab:opus-reviewer (Opus) review of the analysis or change.';
       if (chosen.injectPolicy) context += '\nSCOPED FINANCIAL POLICY:\n' + await $.fs.read(run + '/financial-policy.md');
       $.ui.log(`Route: ${chosen.model} (${chosen.reason}).`);
       return next({...e,context:[...(e.context || []),context]});
@@ -360,7 +365,7 @@ export function register(on) {
           state.workers += 1;
           if (REVIEW_ROLE.test(e.subagentType)) state.reviews = (state.reviews || 0) + 1;
         }
-        model = spawnModel(e.subagentType, e.model);
+        model = spawnModel(e.subagentType, e.model, state.route || {});
         warnings = budgetWarnings(state);
         return null;
       });
@@ -368,7 +373,7 @@ export function register(on) {
       if (warnings.length) $.ui.log('Claude Lab soft budget: ' + warnings.join('; ') + '. Consider asking the lead to stop and check with you.');
       const reviewHash = /reviewer/i.test(e.subagentType) ? await refreshProject($) : null;
       const contract = `\nLAB CONTRACT: own only your assigned scope. Code verification folder: ${state.verificationProject || cfg.project}. Read its relevant project instructions and the task artifacts at ${run}. Read core-instructions.md before editing or committing, and financial-policy.md for financial work. Return a compact report (about 300 words): findings, file/source paths, verification evidence and unresolved issues. Multi-step data or bulk output: process it with a throwaway script and return summaries with a path to the full output, not dumps. Do not spawn workers or modify Claude configuration.`;
-      const financialPolicy = isFinancial(e.prompt) || (state.route?.financial && OPUS_ROLE.test(e.subagentType)) ? '\nSCOPED FINANCIAL POLICY:\n' + await $.fs.read(run + '/financial-policy.md') : '';
+      const financialPolicy = isFinancial(e.prompt) || (state.route?.financial && (OPUS_ROLE.test(e.subagentType) || REVIEW_ROLE.test(e.subagentType))) ? '\nSCOPED FINANCIAL POLICY:\n' + await $.fs.read(run + '/financial-policy.md') : '';
       const result = await next({...e,...(cfg.homeWorkspace && state.verificationProject ? {cwd:state.verificationProject} : {}),...(model ? {model} : {}),prompt:e.prompt + contract + financialPolicy});
       if (result.agentId) await change($, () => { state.agents[result.agentId] = {...state.agents[result.agentId],role:e.subagentType,model:result.model || model || null,effort:state.agents[result.agentId]?.effort || null,steps:state.agents[result.agentId]?.steps || 0,reviewHash}; });
       return result;
@@ -507,7 +512,7 @@ export function register(on) {
       const hint = await change($, () => {state.stopNudged = true; return takeHint();});
       const size = state.changeSize && Number.isFinite(state.changeSize.lines) ? `${state.changeSize.files} file(s), ${state.changeSize.lines} changed line(s)` : 'unmeasured size';
       const why = state.route?.financial ? 'this is a financial task' : state.route?.risky ? 'this is security-sensitive' : state.scopeRequired ? 'no code folder is selected' : (state.changeSize && Number.isFinite(state.changeSize.lines) ? `the change (${size}) is above the small-change limit of ${FAST.files} files and ${FAST.lines} lines` : 'the size of the change could not be measured');
-      return {block:`Before finishing: ${why}, so the full handoff applies. Record the compact checkpoint. For code edits, run meaningful acceptance checks through the lab verify tool and obtain independent harness-lab:reviewer approval for the latest revision. Financial tasks need one approved harness-lab:reviewer review. ` +
+      return {block:`Before finishing: ${why}, so the full handoff applies. Record the compact checkpoint. For code edits, run meaningful acceptance checks through the lab verify tool and obtain independent harness-lab:reviewer (Sonnet) approval for the latest revision. Financial and security-sensitive work needs one approved harness-lab:opus-reviewer (Opus) review. ` +
         (hint ? hintText(hint) + ' ' : '') + 'If blocked, record the missing evidence and clearly report incomplete work. This reminder fires once.'};
     }
     await change($, () => {state.evidenceComplete = complete;});

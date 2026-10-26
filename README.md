@@ -8,7 +8,7 @@
 
 Why you might want it:
 
-- **Smaller, cheaper by default.** A 300k context cap, Sonnet as the lead model with Opus kept for the reviewer and reasoner agents you invoke on larger or riskier work, capped tool output, and fewer idle tools in the prompt.
+- **Smaller, cheaper by default.** A 300k context cap, Sonnet as the lead model with Opus kept for financial or security-sensitive reviews and the reasoner agent, capped tool output, and fewer idle tools in the prompt.
 - **See where your tokens go.** A status line shows context size and prompt-cache time left; `lab-usage-scan` reads your own transcripts and shows which tools and models use the most.
 - **Opt-in and reversible.** It is a thin launcher. It does not patch Claude Code and does not edit your Claude settings. Plain `claude` keeps working exactly as before; only sessions started with `claude-lab` get the tuned setup.
 
@@ -70,7 +70,7 @@ flowchart TD
     C --> SL["Status line<br/>context, cache time left<br/>bin/lab_statusline.py"]
     C --> H["Prompt hook<br/>bin/ready_guard.py"]
     C --> P["harness-lab plugin"]
-    P --> A["Agents<br/>implementer, investigator: Sonnet<br/>reviewer, reasoner: Opus"]
+    P --> A["Agents<br/>implementer, investigator: Sonnet<br/>reviewer: Sonnet<br/>opus-reviewer, reasoner: Opus"]
     P --> T["Tools<br/>checkpoint, verify, select_project"]
     P --> K["Skills<br/>work-task, code-first-data"]
     T -->|"handoff and check evidence"| R
@@ -85,7 +85,7 @@ Plain `claude` never goes through any of this. There is also an optional tmux an
 | Optimization | What it does | Why it saves tokens or money |
 |---|---|---|
 | Context cap and compaction | Starts Claude with `--autocompact 300k` | Every message re-reads the whole context. A smaller ceiling means each call re-reads less, and compaction runs before the context gets huge. A window you set yourself (`CLAUDE_CODE_AUTO_COMPACT_WINDOW`) wins. |
-| Sonnet by default, Opus on purpose | Lead model is Sonnet. Opus is used only by the `reviewer` and `reasoner` agents, when the lead spawns them. There is no default `advisorModel` (opt in with `CLAUDE_LAB_ADVISOR_MODEL=opus`) | Sonnet costs much less per token. Opus is spent only where a second, stronger opinion matters. The lead model is fixed for a task, because switching models in a session rebuilds the prompt cache. |
+| Sonnet by default, Opus on purpose | Lead model is Sonnet. Opus is used only by the `reasoner` and `opus-reviewer` agents, and by the `reviewer` on financial or security-sensitive tasks or when the lead explicitly asks for it. There is no default `advisorModel` (opt in with `CLAUDE_LAB_ADVISOR_MODEL=opus`) | Sonnet costs much less per token. Opus is spent only where a second, stronger opinion matters. The lead model is fixed for a task, because switching models in a session rebuilds the prompt cache. |
 | Effort routing | `modelSettings`: Sonnet at medium effort, Opus at high | Less hidden thinking on routine work. |
 | Subagent limits | `implementer` and `investigator` pin `model: sonnet` in their own files, and the plugin hook overrides any `model` argument the lead passes. `CLAUDE_CODE_SUBAGENT_MODEL` is also set, but since Claude Code 2.1.251 it is only a default, so it is not relied on. Spawn depth 1, no forked history, at most 4 at once | Subagents each carry their own context. Limiting depth, count and history stops cost multiplying. |
 | Cap on tool output | `MAX_MCP_OUTPUT_TOKENS=8000`, `bashOutputMaxChars=15000` | Huge tool results sit in the context for the rest of the session. A cap keeps them small. |
@@ -93,7 +93,7 @@ Plain `claude` never goes through any of this. There is also an optional tmux an
 | No background surprises | Auto-updater off, memory writes off, prompt suggestions off, goal check-ins off, cron/wakeup/remote-trigger tools hidden | Removes model calls you did not ask for. |
 | Quiet sessions | Only the safety hooks you name are carried over (`CLAUDE_LAB_KEEP_HOOKS`); noisy plugins can be left out (`CLAUDE_LAB_DISABLE_PLUGINS`) | Less startup text and fewer injected messages. |
 | Status line | Shows context size, prompt-cache time left, compactions and plan usage, with plain-word warnings | The costly moments are a cache miss (the whole context is re-sent at full price) and a bloated or repeatedly compacted context. The bar tells you when to start fresh. It never pings the model to keep the cache warm. |
-| Plugin agents | `implementer` (Sonnet, medium effort), `investigator` (low effort, no project notes), `reviewer` and `reasoner` (Opus, high effort, spawned only on the full-handoff path or for a hard question) | Each job gets the cheapest setup that fits it. Reviews come from a separate agent that did not write the code. |
+| Plugin agents | `implementer` (Sonnet, medium effort), `investigator` (low effort, no project notes), `reviewer` (Sonnet, high effort, spawned on the full-handoff path), `opus-reviewer` and `reasoner` (Opus, high effort; the Opus reviewer for financial or security-sensitive work or on request, the reasoner for a hard question) | Each job gets the cheapest setup that fits it. Reviews come from a separate agent that did not write the code. |
 | Task workflow and budget | A short workflow prompt with a small-change fast path: a change of at most 3 source files and about 80 changed lines that is not financial or security-sensitive is done by the lead alone, with no checkpoint, worker or reviewer. Larger or riskier work uses at most 4 workers, 1 review plus 1 re-review, and stops to ask at about 2M tokens | The budget is soft. It guides and never blocks. The limits are `CLAUDE_LAB_SMALL_FILES` and `CLAUDE_LAB_SMALL_LINES`. The size is measured against the source as it was when the task started; when it cannot be measured the full handoff applies. The trade-off: on the fast path the lab records no verification evidence, so the lead's own test run is the only check. |
 | Handoff files | A checkpoint tool writes brief, plan, context and verification notes outside your project | At a task boundary you start fresh and read about 6000 characters of notes instead of dragging the whole conversation along. |
 | Checked results | Acceptance checks run as plain argument lists (no shell, an allowed-program list, 60 second timeout), keyed to a fingerprint of your source. Code changes above the small-change limit, and all financial or security-sensitive work, need an independent reviewer approval | Fewer "it works" claims that do not hold, which means fewer expensive correction rounds. |

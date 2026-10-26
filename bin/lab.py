@@ -390,7 +390,7 @@ def settings(run: Path, home: bool = False, full_tools: bool = False) -> dict:
     # Effort comes from modelSettings only (no top-level effortLevel); xhigh needs /lab-model opus or /effort.
     # The per-agent cacheTtl (implementer 1h, investigator 5m) applies only while subagentPromptCacheTtl is unset.
     # No advisor model by default: it would be one more Opus path the lead can take on its own. Opt in with
-    # CLAUDE_LAB_ADVISOR_MODEL=opus. Opus runs only for the reviewer and reasoner agents you invoke.
+    # CLAUDE_LAB_ADVISOR_MODEL=opus. Opus runs only for the reasoner and opus-reviewer agents, and for the reviewer on financial or security-sensitive tasks.
     advisor = os.environ.get('CLAUDE_LAB_ADVISOR_MODEL', '').strip()
     out.update({'model': SONNET, **({'advisorModel': advisor} if advisor else {}),
                 'modelSettings': {SONNET: {'effortLevel': 'medium'},

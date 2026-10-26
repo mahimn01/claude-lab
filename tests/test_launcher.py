@@ -211,7 +211,7 @@ class LauncherTest(unittest.TestCase):
         self.assertNotIn('CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS',env)
         self.assertEqual(before,{p.name:p.read_bytes() for p in self.run.iterdir() if p.name not in {'runtime.json','settings.json'}})
         turns={a.stem:[l for l in a.read_text().splitlines() if l.startswith('maxTurns:')] for a in (ROOT/'plugin/agents').glob('*.md')}
-        self.assertEqual(turns,{'implementer':['maxTurns: 40'],'investigator':['maxTurns: 20'],'reviewer':[],'reasoner':[]})
+        self.assertEqual(turns,{'implementer':['maxTurns: 40'],'investigator':['maxTurns: 20'],'reviewer':[],'opus-reviewer':[],'reasoner':[]})
 
     def test_an_old_native_run_resumes_with_the_capped_window(self):
         cfg=json.loads((self.run/'runtime.json').read_text())

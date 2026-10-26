@@ -76,8 +76,13 @@ test('routing defaults to Sonnet; hard words only flag a reasoner hint; broker w
   expect(route('anything','auto',true)).toMatchObject({model:SONNET,effort:'high',financial:true});
 });
 
-test('spawn models: the router picks every worker model; Opus only for reviewer and reasoner',async () => {
-  expect(spawnModel('harness-lab:reviewer')).toBe(OPUS);
+test('spawn models: the router picks every worker model; Opus only for the reasoner, the Opus reviewer and gated reviews',async () => {
+  expect(spawnModel('harness-lab:reviewer')).toBe(SONNET);
+  expect(spawnModel('harness-lab:reviewer','',{financial:false,risky:false})).toBe(SONNET);
+  expect(spawnModel('harness-lab:reviewer','',{financial:true})).toBe(OPUS);
+  expect(spawnModel('harness-lab:reviewer','',{risky:true})).toBe(OPUS);
+  expect(spawnModel('harness-lab:reviewer','opus')).toBe(OPUS);
+  expect(spawnModel('harness-lab:opus-reviewer')).toBe(OPUS);
   expect(spawnModel('harness-lab:reasoner')).toBe(OPUS);
   expect(spawnModel('staff-reviewer')).toBe(OPUS);
   expect(spawnModel('other-plugin:finish-reviewer')).toBe(SONNET);
@@ -121,7 +126,7 @@ test('financial context is scoped to a financial prompt, runs Sonnet high and re
   expect(normal.context.join('\n').includes('SCOPED FINANCIAL POLICY')).toBe(false);
   const financial=await prompt($,'Review IBKR margin');await step($);
   expect(financial.context.join('\n').includes('SCOPED FINANCIAL POLICY')).toBe(true);
-  expect(financial.context.join('\n').includes('harness-lab:reviewer (Opus) review')).toBe(true);
+  expect(financial.context.join('\n').includes('harness-lab:opus-reviewer (Opus) review')).toBe(true);
   expect(f.models).toEqual([SONNET]);expect(f.efforts).toEqual(['high']);
   const follow=await prompt($,'and the next one?');
   expect(follow.context.join('\n').includes('SCOPED FINANCIAL POLICY')).toBe(false);
@@ -184,7 +189,7 @@ test('workers keep the model and effort their spawn resolved',async ($,on) => {
   const worker=await $.agent.spawn({prompt:'Implement one scoped change',subagentType:'harness-lab:implementer'});
   await $.agent.spawn({prompt:'Find the call sites',subagentType:'Explore'});
   await $.agent.spawn({prompt:'Review the change',subagentType:'harness-lab:reviewer'});
-  expect(f.spawnModels).toEqual([SONNET,SONNET,OPUS]);
+  expect(f.spawnModels).toEqual([SONNET,SONNET,SONNET]);
   await step($,worker.agentId,0,'claude-haiku-5-5');
   expect(f.models).toEqual(['claude-haiku-5-5']);
   expect(f.efforts).toEqual([undefined]);
@@ -230,7 +235,7 @@ test('worker starts and review remain available beyond obsolete stored budgets',
   const launches=await Promise.all(Array.from({length:10},() => $.agent.spawn({prompt:'Implement one scoped change',subagentType:'harness-lab:implementer'})));
   expect(launches.filter(x => !x.deny).length).toBe(10);
   const review=await $.agent.spawn({prompt:'Independently inspect the completed change',subagentType:'harness-lab:reviewer'});
-  expect(review.model).toBe('claude-opus-5-5');
+  expect(review.model).toBe('claude-sonnet-5-5');
   const extra=await $.agent.spawn({prompt:'Implement another change',subagentType:'harness-lab:implementer'});
   expect(Boolean(extra.deny)).toBe(false);
   expect(f.spawns).toBe(12);
@@ -344,7 +349,7 @@ test('two real checker failures keep the lead model and return one reasoner hint
 test('a rejected review does not switch the lead; the next prompt carries the reasoner hint',async ($,on) => {
   const f=fixture(on,{checkpoint:true,codeEdited:true});await start($);await prompt($,'Implement a bounded fix');
   const reviewer=await $.agent.spawn({prompt:'Review final code',subagentType:'harness-lab:reviewer'});
-  expect(reviewer.model).toBe(OPUS);
+  expect(reviewer.model).toBe(SONNET);
   await $.turn.complete({turnId:'review',agentId:reviewer.agentId,answer:'{"approved":false,"findings":["missing test"]}',durationMs:10,isAborted:false,reason:'answer'});
   const next=await prompt($,'fix it');await step($);
   expect(f.models).toEqual([SONNET]);
@@ -523,4 +528,25 @@ test('the fast-path limits can be tuned through runtime.json',async ($,on) => {
   const stop=await $.classic.Stop({session_id:'s',transcript_path:'/t',cwd:'/project',hook_event_name:'Stop',stop_hook_active:false,last_assistant_message:'Done'});
   expect(stop.block.includes('small-change limit of 1 files and 10 lines')).toBe(true);
   configure({});
+});
+
+test('the ordinary reviewer runs on Sonnet; financial and security-sensitive tasks get Opus for it',async ($,on) => {
+  const f=fixture(on);await start($);
+  await prompt($,'Refactor the report module');
+  expect((await $.agent.spawn({prompt:'Review',subagentType:'harness-lab:reviewer'})).model).toBe(SONNET);
+  expect((await $.agent.spawn({prompt:'Review',subagentType:'harness-lab:opus-reviewer'})).model).toBe(OPUS);
+  await prompt($,'Harden the authentication check in login');
+  expect((await $.agent.spawn({prompt:'Review',subagentType:'harness-lab:reviewer'})).model).toBe(OPUS);
+  await prompt($,'Adjust the IBKR stop order sizing');
+  const fin=await $.agent.spawn({prompt:'Review',subagentType:'harness-lab:reviewer'});
+  expect(fin.model).toBe(OPUS);
+  expect(f.spawnModels).toEqual([SONNET,OPUS,OPUS,OPUS]);
+});
+
+test('an approved opus-reviewer report counts as the independent review',async ($,on) => {
+  const f=fixture(on,{checkpoint:true,codeEdited:true});await start($);await prompt($,'Harden the authentication check in login');
+  const reviewer=await $.agent.spawn({prompt:'Review final code',subagentType:'harness-lab:opus-reviewer'});
+  await $.turn.complete({turnId:'review',agentId:reviewer.agentId,answer:'{"approved":true,"findings":[]}',durationMs:10,isAborted:false,reason:'answer'});
+  const state=JSON.parse(f.files.get('/lab/run/metrics.json'));
+  expect(state.review.approved).toBe(true);
 });
