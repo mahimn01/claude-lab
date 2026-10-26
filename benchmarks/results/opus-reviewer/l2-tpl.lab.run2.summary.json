@@ -1,0 +1,82 @@
+{
+  "name": "l2-tpl.lab.run2",
+  "arm": "lab",
+  "task": "l2-tpl",
+  "run": 2,
+  "exit": 0,
+  "wall_s_measured": 266.2,
+  "duration_ms": 4683,
+  "duration_api_ms": 269716,
+  "num_turns": 1,
+  "total_cost_usd": 0.8164853,
+  "is_error": false,
+  "subagents": {
+    "harness-lab:reviewer": 2
+  },
+  "usage": {
+    "input_tokens": 2,
+    "cache_creation_input_tokens": 2030,
+    "cache_read_input_tokens": 32947,
+    "output_tokens": 228,
+    "output_tokens_details": {
+      "thinking_tokens": 0
+    },
+    "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+    },
+    "service_tier": "standard",
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 2030,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "iterations": [
+      {
+        "input_tokens": 2,
+        "output_tokens": 228,
+        "cache_read_input_tokens": 32947,
+        "cache_creation_input_tokens": 2030,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 2030
+        },
+        "type": "message"
+      }
+    ],
+    "speed": "standard",
+    "fallback_credit": null
+  },
+  "modelUsage": {
+    "claude-sonnet-5-5": {
+      "inputTokens": 32,
+      "outputTokens": 14355,
+      "cacheReadInputTokens": 330627,
+      "cacheCreationInputTokens": 28079,
+      "webSearchRequests": 0,
+      "costUSD": 0.28899270000000005,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 2162,
+      "canonicalModel": "claude-sonnet-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+    },
+    "claude-opus-5-5": {
+      "inputTokens": 18,
+      "outputTokens": 15849,
+      "cacheReadInputTokens": 73378,
+      "cacheCreationInputTokens": 39153,
+      "webSearchRequests": 0,
+      "costUSD": 0.5274926,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 8517,
+      "canonicalModel": "claude-opus-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+    }
+  },
+  "visible_tests_pass": true,
+  "hidden_tests_pass": false
+}

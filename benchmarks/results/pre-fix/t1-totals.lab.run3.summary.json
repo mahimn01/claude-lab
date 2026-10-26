@@ -1,0 +1,79 @@
+{
+  "name": "t1-totals.lab.run3",
+  "arm": "lab",
+  "task": "t1-totals",
+  "run": 3,
+  "exit": 0,
+  "wall_s_measured": 106.0,
+  "duration_ms": 4372,
+  "duration_api_ms": 111713,
+  "num_turns": 1,
+  "total_cost_usd": 0.3678561,
+  "is_error": false,
+  "usage": {
+    "input_tokens": 2,
+    "cache_creation_input_tokens": 1997,
+    "cache_read_input_tokens": 20098,
+    "output_tokens": 277,
+    "output_tokens_details": {
+      "thinking_tokens": 0
+    },
+    "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+    },
+    "service_tier": "standard",
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 1997,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "iterations": [
+      {
+        "input_tokens": 2,
+        "output_tokens": 277,
+        "cache_read_input_tokens": 20098,
+        "cache_creation_input_tokens": 1997,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 1997
+        },
+        "type": "message"
+      }
+    ],
+    "speed": "standard",
+    "fallback_credit": null
+  },
+  "modelUsage": {
+    "claude-sonnet-5-5": {
+      "inputTokens": 30,
+      "outputTokens": 3365,
+      "cacheReadInputTokens": 203467,
+      "cacheCreationInputTokens": 15197,
+      "webSearchRequests": 0,
+      "costUSD": 0.11484470000000002,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 165,
+      "canonicalModel": "claude-sonnet-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+    },
+    "claude-opus-5-5": {
+      "inputTokens": 10896,
+      "outputTokens": 5846,
+      "cacheReadInputTokens": 67112,
+      "cacheCreationInputTokens": 15817,
+      "webSearchRequests": 0,
+      "costUSD": 0.2530114,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 914,
+      "canonicalModel": "claude-opus-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+    }
+  },
+  "visible_tests_pass": true,
+  "hidden_tests_pass": true
+}

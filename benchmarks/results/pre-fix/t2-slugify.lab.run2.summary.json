@@ -1,0 +1,79 @@
+{
+  "name": "t2-slugify.lab.run2",
+  "arm": "lab",
+  "task": "t2-slugify",
+  "run": 2,
+  "exit": 0,
+  "wall_s_measured": 48.1,
+  "duration_ms": 2067,
+  "duration_api_ms": 49881,
+  "num_turns": 1,
+  "total_cost_usd": 0.1511919,
+  "is_error": false,
+  "usage": {
+    "input_tokens": 2,
+    "cache_creation_input_tokens": 872,
+    "cache_read_input_tokens": 17658,
+    "output_tokens": 147,
+    "output_tokens_details": {
+      "thinking_tokens": 0
+    },
+    "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+    },
+    "service_tier": "standard",
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 872,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "iterations": [
+      {
+        "input_tokens": 2,
+        "output_tokens": 147,
+        "cache_read_input_tokens": 17658,
+        "cache_creation_input_tokens": 872,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 872
+        },
+        "type": "message"
+      }
+    ],
+    "speed": "standard",
+    "fallback_credit": null
+  },
+  "modelUsage": {
+    "claude-sonnet-5-5": {
+      "inputTokens": 20,
+      "outputTokens": 2342,
+      "cacheReadInputTokens": 131029,
+      "cacheCreationInputTokens": 11632,
+      "webSearchRequests": 0,
+      "costUSD": 0.0830909,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 55,
+      "canonicalModel": "claude-sonnet-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+    },
+    "claude-opus-5-5": {
+      "inputTokens": 8,
+      "outputTokens": 1474,
+      "cacheReadInputTokens": 23795,
+      "cacheCreationInputTokens": 6766,
+      "webSearchRequests": 0,
+      "costUSD": 0.068101,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 582,
+      "canonicalModel": "claude-opus-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+    }
+  },
+  "visible_tests_pass": true,
+  "hidden_tests_pass": true
+}

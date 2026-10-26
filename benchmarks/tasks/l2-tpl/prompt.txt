@@ -1,0 +1,16 @@
+Extend the tiny template engine in the tpl package of this folder (lexer.py, engine.py, plus a new filters.py). The existing tests in test_tpl.py already describe part of the new behaviour and currently fail; make them pass, add more tests of your own for the rest, and keep everything green. Text outside tags is never changed. Specification:
+
+Variables: `{{ a.b.c }}` looks the path up through dicts (key first) and then attributes; a missing path or None renders as "". Everything is rendered with str().
+
+Filters: `{{ expr|f1|f2:"arg" }}` applies filters left to right. An argument is a double-quoted string literal with no escapes and no quote inside; it is passed to the filter as a Python str. Filters live in the new tpl/filters.py. The value passed to the first filter is None when the path is missing. Filters: `upper`, `lower`, `title` (str methods; None becomes ""), `length` (len of the value, 0 for None or missing), `default:"x"` (use "x" when the value is missing, None or ""; 0 and False are kept), `join:"sep"` (join str() of each item of a list or tuple; None becomes ""), and `safe` (returns the value unchanged and marks the result as not to be escaped). `default` and `join` take exactly one argument and all the others take none; a wrong argument count raises TemplateError("bad filter arguments: NAME"). An unknown filter raises TemplateError("unknown filter: NAME").
+
+Escaping: the final value of every `{{ }}` is converted with str() ("" for None) and then HTML-escaped (& < > " ' become &amp; &lt; &gt; &quot; &#x27;, in a single pass) unless `safe` appears anywhere in its filter chain.
+
+Tags use `{% ... %}`; spaces inside are optional (`{%if x%}` works).
+- `{% if x %}...{% elif y %}...{% else %}...{% endif %}`: x and y are a dotted path or `not` followed by a dotted path; true means Python truthiness of the value, and a missing path is false. Any number of elif branches, else optional.
+- `{% for item in path %}...{% endfor %}`: iterates the value at path (missing or None means no iterations). `item` is visible inside only and does not leak or modify the caller's context. Inside the loop `loop` is a dict-like with index (1-based), index0, first and last (bools); in nested loops the inner `loop` shadows the outer one only inside the inner loop.
+- Both can be nested in each other.
+
+Errors, all TemplateError, and all raised while parsing, i.e. before any output, even for branches that would not run: `unclosed block: if` or `unclosed block: for` (name the innermost unclosed block); `unexpected tag: NAME` for an elif, else, endif or endfor with no matching open block of the right kind (including an endfor closing an if, or a second else); `unknown tag: NAME` (NAME is the first word); `bad for tag: BODY` when a for tag is not exactly `for NAME in PATH` (BODY is the stripped text between the delimiters), and `bad if tag: BODY` when an if/elif has no condition or more than the allowed words.
+
+The public API stays `tpl.render(template, context=None)` and `tpl.TemplateError`.

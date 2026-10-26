@@ -1,0 +1,1 @@
+Fix the negative-value bug in totals.py. Preserve the public API and verify all test_totals.py cases.

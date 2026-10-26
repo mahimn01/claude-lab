@@ -54,7 +54,8 @@ $ claude-lab route "fix the failing test in totals.py"
 
 > Honest note: the savings below come from how the settings work (smaller context, cheaper default model,
 > fewer idle tools, less tool output). They are reasoned, and each one is a setting you can read in
-> `bin/lab.py`. This repo does not ship benchmark numbers. To measure on your own work, use
+> `bin/lab.py`. A small measured comparison is in [Measured results](#measured-results) further down, with its
+> limits stated; it does not show the lab being cheaper on larger tasks. To measure on your own work, use
 > `claude-lab benchmark` and `lab-usage-scan` (both described below). Nothing here calls a model unless you
 > start a session.
 
@@ -213,6 +214,55 @@ runs `claude` with a long-lived token read from a `0600` file.
 - `scripts/scan-secrets.sh` scans the tracked files for token and key patterns and personal paths. Run it
   before you push.
 
+## Measured results
+
+One box, one date (2026-10-26), Claude Code 2.1.310 for both arms, synthetic tasks, small samples. Plain = `claude -p` with the
+account's default model (Sonnet). Lab = this repo's launcher. Cost is `total_cost_usd` as Claude Code printed it (API list price
+equivalent, not a bill). Pass = the project's visible tests, and a hidden test the agent never saw. Harness, tasks and every summary
+file are in [`benchmarks/`](benchmarks/); the tables can be recomputed from them without a model call.
+
+**Small tasks** (3 tasks, 3 runs per arm and task; each is a few lines to change, so the fast path applies):
+
+| | Lab cost / run | Lab wall | Plain cost / run | Plain wall | Opus used |
+|---|---|---|---|---|---|
+| Before the helper-model fix | $0.274 | 78 s | $0.036 | 10 s | 59-69% of lab cost |
+| After (fast path, helpers pinned) | $0.040 | 15 s | $0.039 | 11 s | none |
+
+Hidden-test passes were the same in both arms after the fix (8/9 each; one t2 test encodes one reading of an ambiguous spec).
+With the fast path the lab does the work itself, so it behaves like a plain Sonnet run here; it is not cheaper than plain.
+These small tasks were not re-run after the later reviewer change, because it does not touch the fast path.
+
+**Larger tasks** (2 tasks, about 70 and 110 added source lines across several files; these need the full checkpoint, verify and
+independent-review path). Means over all runs of both tasks:
+
+| | Runs | Lab cost / run | Lab wall | Plain cost / run | Plain wall | Lab cost vs plain | Opus share of lab cost | Hidden passes (lab / plain) |
+|---|---|---|---|---|---|---|---|---|
+| Reviewer on Opus | 4 lab, 4 plain | $0.71 | 235 s | $0.17 | 59 s | 4.1x | 64-65% | 2/4 / 3/4 |
+| Reviewer on Sonnet (current) | 6 lab, 6 plain | $0.45 | 285 s | $0.14 | 61 s | 3.2x | 0% (financial and security-sensitive reviews still use Opus) | 5/6 / 3/6 |
+
+By task (current reviewer): l1 lab $0.31 and 131 s vs plain $0.11 and 45 s, both 3/3 on hidden tests; l2 lab $0.60 and 440 s (one
+run took 749 s) vs plain $0.17 and 76 s, hidden tests 2/3 vs 0/3. Every larger lab run used 1 to 3 `harness-lab:reviewer` subagents;
+that review is where most of the extra cost and time goes.
+
+How to read this: on larger tasks the lab still costs about three times plain and takes several times longer in these runs. Moving
+the reviewer from Opus to Sonnet cut the lab's cost per run by roughly a third, but did not close the gap. The hidden-test counts
+differ slightly in the lab's favour (l2: plain failed the same assertion in all runs, joining a list that contained `None`, and the
+lab passed it in 2 of 3 current runs but 0 of 2 earlier ones), which at these sample sizes is not a significant difference. The
+lab's review is an extra check, not a measured quality gain, and its price is visible above.
+
+Caveats: synthetic tasks written for this test, 2 to 3 runs per cell, one machine, one date, one account, interleaved sequential
+runs with no control for model-side variance (one l2 lab run took 749 s). l1's hidden test had one assertion the task text did not
+specify; it was removed after the first lab runs, all l1 results here are graded without it, and the original is kept as
+`benchmarks/tasks/l1-ledger/hidden_test.original.py`. Total benchmark spend for the current section was about $3.6, plus about $0.15 for two model-split probes. Do not read
+any of this as a general saving figure.
+
+Reproduce:
+
+    export CLAUDE_BIN=$(command -v claude) BENCH_OUT=/tmp/lab-bench
+    for n in 1 2 3; do for task in l1-ledger l2-tpl; do
+      for arm in plain lab; do python3 benchmarks/run.py $arm $task $n; done; done; done
+    python3 benchmarks/summarize.py /tmp/lab-bench        # or: benchmarks/results/sonnet-reviewer
+
 ## Limitations
 
 - Needs a recent Claude Code. Settings keys the lab writes may be ignored by older versions.
@@ -247,6 +297,7 @@ bin/            claude-lab (command), lab.py (launcher), token_store.py, bili_pr
 plugin/         the harness-lab plugin: agents, hooks, skills, tests
 references/     the task-workflow prompt
 demo-project/   a tiny project with a bug, for dry runs and benchmarks
+benchmarks/     synthetic tasks, the plain-vs-lab run harness, and the summary files behind the results above
 parallel/       optional tmux + worktree session runner
 hooks/          authorship hooks (commit-msg, pre-push)
 scripts/        install, run-tests, scan-secrets, check-authorship, install-hooks

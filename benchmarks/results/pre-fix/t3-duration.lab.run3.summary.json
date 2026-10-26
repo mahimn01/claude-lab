@@ -1,0 +1,79 @@
+{
+  "name": "t3-duration.lab.run3",
+  "arm": "lab",
+  "task": "t3-duration",
+  "run": 3,
+  "exit": 0,
+  "wall_s_measured": 117.1,
+  "duration_ms": 42887,
+  "duration_api_ms": 116100,
+  "num_turns": 8,
+  "total_cost_usd": 0.4232473000000001,
+  "is_error": false,
+  "usage": {
+    "input_tokens": 14,
+    "cache_creation_input_tokens": 6040,
+    "cache_read_input_tokens": 119147,
+    "output_tokens": 2063,
+    "output_tokens_details": {
+      "thinking_tokens": 147
+    },
+    "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+    },
+    "service_tier": "standard",
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 6040,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "iterations": [
+      {
+        "input_tokens": 4,
+        "output_tokens": 224,
+        "cache_read_input_tokens": 22480,
+        "cache_creation_input_tokens": 456,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 456
+        },
+        "type": "message"
+      }
+    ],
+    "speed": "standard",
+    "fallback_credit": null
+  },
+  "modelUsage": {
+    "claude-sonnet-5-5": {
+      "inputTokens": 28,
+      "outputTokens": 3936,
+      "cacheReadInputTokens": 201047,
+      "cacheCreationInputTokens": 16038,
+      "webSearchRequests": 0,
+      "costUSD": 0.1236727,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 199,
+      "canonicalModel": "claude-sonnet-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+    },
+    "claude-opus-5-5": {
+      "inputTokens": 11341,
+      "outputTokens": 8010,
+      "cacheReadInputTokens": 59803,
+      "cacheCreationInputTokens": 16410,
+      "webSearchRequests": 0,
+      "costUSD": 0.29957459999999997,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 944,
+      "canonicalModel": "claude-opus-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+    }
+  },
+  "visible_tests_pass": true,
+  "hidden_tests_pass": true
+}

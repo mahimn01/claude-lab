@@ -1,0 +1,1 @@
+Two functions in textutil.py are wrong: slugify and truncate. Fix them so every case in test_textutil.py passes, keep the function names and signatures, and run the tests to confirm.

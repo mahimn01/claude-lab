@@ -1,0 +1,82 @@
+{
+  "name": "l2-tpl.lab.run1",
+  "arm": "lab",
+  "task": "l2-tpl",
+  "run": 1,
+  "exit": 0,
+  "wall_s_measured": 266.6,
+  "duration_ms": 16320,
+  "duration_api_ms": 271126,
+  "num_turns": 5,
+  "total_cost_usd": 0.8149423999999998,
+  "is_error": false,
+  "subagents": {
+    "harness-lab:reviewer": 2
+  },
+  "usage": {
+    "input_tokens": 10,
+    "cache_creation_input_tokens": 4274,
+    "cache_read_input_tokens": 133729,
+    "output_tokens": 1525,
+    "output_tokens_details": {
+      "thinking_tokens": 47
+    },
+    "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+    },
+    "service_tier": "standard",
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 4274,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "iterations": [
+      {
+        "input_tokens": 2,
+        "output_tokens": 216,
+        "cache_read_input_tokens": 34897,
+        "cache_creation_input_tokens": 473,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 473
+        },
+        "type": "message"
+      }
+    ],
+    "speed": "standard",
+    "fallback_credit": null
+  },
+  "modelUsage": {
+    "claude-sonnet-5-5": {
+      "inputTokens": 40,
+      "outputTokens": 14110,
+      "cacheReadInputTokens": 425414,
+      "cacheCreationInputTokens": 28472,
+      "webSearchRequests": 0,
+      "costUSD": 0.29760939999999997,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 1767,
+      "canonicalModel": "claude-sonnet-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+    },
+    "claude-opus-5-5": {
+      "inputTokens": 18,
+      "outputTokens": 15804,
+      "cacheReadInputTokens": 70130,
+      "cacheCreationInputTokens": 37431,
+      "webSearchRequests": 0,
+      "costUSD": 0.5173329999999999,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 9529,
+      "canonicalModel": "claude-opus-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+    }
+  },
+  "visible_tests_pass": true,
+  "hidden_tests_pass": false
+}

@@ -1,0 +1,83 @@
+{
+  "name": "l1-ledger.lab.run2",
+  "arm": "lab",
+  "task": "l1-ledger",
+  "run": 2,
+  "exit": 0,
+  "wall_s_measured": 122.6,
+  "duration_ms": 3501,
+  "duration_api_ms": 125193,
+  "num_turns": 1,
+  "total_cost_usd": 0.4502631,
+  "is_error": false,
+  "subagents": {
+    "harness-lab:reviewer": 1
+  },
+  "usage": {
+    "input_tokens": 2,
+    "cache_creation_input_tokens": 2091,
+    "cache_read_input_tokens": 24227,
+    "output_tokens": 398,
+    "output_tokens_details": {
+      "thinking_tokens": 0
+    },
+    "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+    },
+    "service_tier": "standard",
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 2091,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "iterations": [
+      {
+        "input_tokens": 2,
+        "output_tokens": 398,
+        "cache_read_input_tokens": 24227,
+        "cache_creation_input_tokens": 2091,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 2091
+        },
+        "type": "message"
+      }
+    ],
+    "speed": "standard",
+    "fallback_credit": null
+  },
+  "modelUsage": {
+    "claude-sonnet-5-5": {
+      "inputTokens": 22,
+      "outputTokens": 7968,
+      "cacheReadInputTokens": 189737,
+      "cacheCreationInputTokens": 19420,
+      "webSearchRequests": 0,
+      "costUSD": 0.17637770000000003,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 1286,
+      "canonicalModel": "claude-sonnet-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+    },
+    "claude-opus-5-5": {
+      "inputTokens": 16,
+      "outputTokens": 7793,
+      "cacheReadInputTokens": 88132,
+      "cacheCreationInputTokens": 20067,
+      "webSearchRequests": 0,
+      "costUSD": 0.2738854,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 4011,
+      "canonicalModel": "claude-opus-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+    }
+  },
+  "visible_tests_pass": true,
+  "hidden_tests_pass": true,
+  "hidden_tests_pass_original_grading": false
+}

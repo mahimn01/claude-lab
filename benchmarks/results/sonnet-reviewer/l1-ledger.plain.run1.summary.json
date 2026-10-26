@@ -1,0 +1,66 @@
+{
+  "name": "l1-ledger.plain.run1",
+  "arm": "plain",
+  "task": "l1-ledger",
+  "run": 1,
+  "exit": 0,
+  "wall_s_measured": 45.9,
+  "duration_ms": 45203,
+  "duration_api_ms": 44818,
+  "num_turns": 3,
+  "total_cost_usd": 0.0899015,
+  "is_error": false,
+  "subagents": {},
+  "usage": {
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 6969,
+    "cache_read_input_tokens": 54635,
+    "output_tokens": 5655,
+    "output_tokens_details": {
+      "thinking_tokens": 1102
+    },
+    "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+    },
+    "service_tier": "standard",
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 6969,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "iterations": [
+      {
+        "input_tokens": 2,
+        "output_tokens": 538,
+        "cache_read_input_tokens": 19495,
+        "cache_creation_input_tokens": 5044,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 5044
+        },
+        "type": "message"
+      }
+    ],
+    "speed": "standard",
+    "fallback_credit": null
+  },
+  "modelUsage": {
+    "claude-sonnet-5-5": {
+      "inputTokens": 6,
+      "outputTokens": 5655,
+      "cacheReadInputTokens": 54635,
+      "cacheCreationInputTokens": 6969,
+      "webSearchRequests": 0,
+      "costUSD": 0.0899015,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 1102,
+      "canonicalModel": "claude-sonnet-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+    }
+  },
+  "visible_tests_pass": true,
+  "hidden_tests_pass": true
+}
