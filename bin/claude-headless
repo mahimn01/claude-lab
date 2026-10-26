@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# claude-headless: optional wrapper that runs `claude` with a long-lived OAuth token read from a file.
+# Use it by setting LAB_CLAUDE_CMD=claude-headless. Skip it if you log in to Claude Code normally.
+# Create the token with `claude setup-token`, save it in the file, and run chmod 600 on the file.
+set -euo pipefail
+TOKEN_FILE="${LAB_TOKEN_FILE:-$HOME/.config/claude-headless/token}"
+if [ ! -f "$TOKEN_FILE" ]; then
+  echo "claude-headless: token file missing: $TOKEN_FILE" >&2
+  echo "  Run 'claude setup-token' on a logged-in machine and save the result there (chmod 600)." >&2
+  exit 78
+fi
+if [ ! -r "$TOKEN_FILE" ]; then
+  echo "claude-headless: token file not readable: $TOKEN_FILE" >&2
+  exit 77
+fi
+perm="$(stat -c %a "$TOKEN_FILE" 2>/dev/null || stat -f %Lp "$TOKEN_FILE")"
+if [ "$perm" != "600" ]; then
+  echo "claude-headless: refusing: $TOKEN_FILE has mode $perm, it must be 600" >&2
+  exit 77
+fi
+CLAUDE_CODE_OAUTH_TOKEN="$(tr -d '[:space:]' < "$TOKEN_FILE")"
+if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+  echo "claude-headless: token file is empty: $TOKEN_FILE" >&2
+  exit 78
+fi
+export CLAUDE_CODE_OAUTH_TOKEN
+# An API key in the environment must not override the OAuth login.
+unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
+exec claude "$@"

@@ -1,0 +1,8 @@
+# Local state, never commit
+.env
+repo/
+worktrees/
+reports/
+tmp/
+prompts/.run-*.md
+*.log

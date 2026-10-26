@@ -1,0 +1,225 @@
+#!/usr/bin/env bash
+# claude-lab: run up to 4 Claude Code sessions at once, each in its own tmux session.
+#
+#   claude-lab start <name> <worktree_dir> <prompt_file> [model] [--kind work|review] [--model M] [--dry-run]
+#   claude-lab list | count | status <name> | tail <name> [lines] | nudge <name> <text> | kill <name>
+#
+# Sessions are named <LAB_SESSION_PREFIX><name> (default rt-<name>). The lab only touches that prefix.
+# Hard cap: 4 sessions. LAB_MAX_SESSIONS can lower it, never raise it.
+# Permissions: Claude Code runs with --permission-mode acceptEdits plus an allow/deny list rendered
+# from config/settings.template.json. It never uses --dangerously-skip-permissions. A command outside
+# the allow list makes the session wait; `claude-lab list` shows WAITING-PERMISSION.
+# Model router: kind "work" uses LAB_MODEL_WORK, kind "review" uses LAB_MODEL_REVIEW.
+set -uo pipefail
+
+LAB_DIR="${LAB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+export LAB_DIR
+# shellcheck source=../lab-env.sh
+source "$LAB_DIR/lab-env.sh"
+
+HARD_CAP=4
+MAX="$LAB_MAX_SESSIONS"
+case "$MAX" in ''|*[!0-9]*) MAX=$HARD_CAP ;; esac
+[ "$MAX" -gt "$HARD_CAP" ] && MAX=$HARD_CAP
+[ "$MAX" -lt 1 ] && MAX=1
+PREFIX="$LAB_SESSION_PREFIX"
+PROTECTED="$LAB_PROTECTED_SESSIONS"
+
+T() {
+  if [ -n "${LAB_TMUX_SOCKET:-}" ]; then tmux -L "$LAB_TMUX_SOCKET" "$@"; else tmux "$@"; fi
+}
+die() { echo "claude-lab: $*" >&2; exit 1; }
+
+is_protected() {
+  local s
+  for s in $PROTECTED; do [ "$1" = "$s" ] && return 0; done
+  return 1
+}
+
+valid_name() {
+  [[ "$1" =~ ^[a-z0-9][a-z0-9_-]{0,30}$ ]] || die "bad name '$1' (use a-z, 0-9, _ and -, max 31 chars)"
+  is_protected "$1" && die "'$1' is a protected name"
+  is_protected "${PREFIX}$1" && die "'${PREFIX}$1' is protected"
+  return 0
+}
+
+rt_sessions() { T list-sessions -F '#{session_name}' 2>/dev/null | grep -E "^${PREFIX}" || true; }
+count_rt() { rt_sessions | grep -c . || true; }
+exists() { T has-session -t "=${PREFIX}$1" 2>/dev/null; }
+
+# Writes the dedicated git config and the Claude settings file. Your own global git config is not touched.
+ensure_config() {
+  mkdir -p "$LAB_CFG"
+  local cf="$LAB_CFG/gitconfig"
+  git config --file "$cf" user.name "$LAB_AUTHOR_NAME"
+  git config --file "$cf" user.email "$LAB_AUTHOR_EMAIL"
+  git config --file "$cf" core.hooksPath "$LAB_DIR/hooks"
+  git config --file "$cf" init.defaultBranch main
+  git config --file "$cf" commit.gpgsign false
+  git config --file "$cf" push.autoSetupRemote true
+  git config --file "$cf" safe.directory '*'
+  git config --file "$cf" credential.https://github.com.helper '!gh auth git-credential'
+  local bp="${LAB_BRANCH_PREFIX//\//\\/}" ld="${LAB_DIR//\//\\/}"
+  sed -e "s/__BRANCH_PREFIX__/$bp/g" -e "s/__LAB_DIR__/$ld/g" \
+    "$LAB_DIR/config/settings.template.json" > "$LAB_CFG/settings.json"
+}
+
+session_state() {
+  local s="${PREFIX}$1" cmd pane act now idle
+  exists "$1" || { echo "absent"; return; }
+  cmd="$(T display-message -p -t "=$s:" '#{pane_current_command}' 2>/dev/null)"
+  pane="$(T capture-pane -p -t "=$s:" -S -40 2>/dev/null)"
+  act="$(T display-message -p -t "=$s:" '#{window_activity}' 2>/dev/null)"
+  now="$(date +%s)"
+  idle=$((now - ${act:-$now}))
+  if echo "$pane" | grep -Eq 'Do you want to (proceed|make this edit|create)|❯ *1\. *Yes|Allow this|\(y/n\)'; then
+    echo "WAITING-PERMISSION"
+  elif echo "$pane" | grep -Eq 'rate limit|usage limit|limit reached|Invalid API key|Please run /login|OAuth token'; then
+    echo "ERROR-AUTH-OR-LIMIT"
+  elif [ "$(T display-message -p -t "=$s:" '#{pane_dead}')" = "1" ]; then
+    echo "dead"
+  elif [ "$cmd" = "bash" ] || [ "$cmd" = "sh" ]; then
+    echo "SHELL-PROMPT(claude exited)"
+  elif [ "$idle" -gt 120 ]; then
+    echo "idle(${idle}s)"
+  else
+    echo "working"
+  fi
+}
+
+route_model() {
+  case "$1" in
+    review) echo "$LAB_MODEL_REVIEW" ;;
+    work|"") echo "$LAB_MODEL_WORK" ;;
+    *) die "unknown kind '$1' (work|review)" ;;
+  esac
+}
+
+# Serialize starts so the cap cannot be raced. Uses flock when present, else a lock directory.
+take_lock() {
+  mkdir -p "$LAB_CFG"
+  if command -v flock >/dev/null 2>&1; then
+    exec 9>"$LAB_CFG/start.lock"
+    flock 9
+  else
+    local i=0
+    until mkdir "$LAB_CFG/start.lockdir" 2>/dev/null; do
+      i=$((i + 1)); [ "$i" -gt 100 ] && die "could not get start lock ($LAB_CFG/start.lockdir)"
+      sleep 0.2
+    done
+    trap 'rmdir "$LAB_CFG/start.lockdir" 2>/dev/null' EXIT
+  fi
+}
+
+cmd_start() {
+  local dry=0 kind="${LAB_KIND:-work}" model="" pos=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --dry-run) dry=1 ;;
+      --kind) kind="${2:?--kind needs a value}"; shift ;;
+      --model) model="${2:?--model needs a value}"; shift ;;
+      *) pos+=("$1") ;;
+    esac
+    shift
+  done
+  [ "${#pos[@]}" -ge 3 ] || die "usage: start <name> <worktree_dir> <prompt_file> [model] [--kind work|review] [--dry-run]"
+  local name="${pos[0]}" wt="${pos[1]}" pf="${pos[2]}"
+  [ -n "${pos[3]:-}" ] && model="${pos[3]}"
+  valid_name "$name"
+  [ -d "$wt" ] || die "worktree dir not found: $wt"
+  [ -f "$pf" ] || die "prompt file not found: $pf"
+  wt="$(cd "$wt" && pwd)"
+  pf="$(cd "$(dirname "$pf")" && pwd)/$(basename "$pf")"
+  [ -n "$model" ] || model="$(route_model "$kind")"
+  [[ "$model" =~ ^[A-Za-z0-9._:-]+$ ]] || die "bad model name '$model'"
+
+  take_lock
+  exists "$name" && die "session ${PREFIX}$name already exists"
+  local n
+  n="$(count_rt)"
+  [ "$n" -lt "$MAX" ] || die "at cap: $n/$MAX sessions running; refusing to start '$name'"
+  ensure_config
+
+  local run
+  if [ "$dry" = 1 ]; then
+    run="echo '[dry-run] would run: $LAB_CLAUDE_CMD --model $model --permission-mode acceptEdits --settings $LAB_CFG/settings.json <prompt from $pf>'; sleep 20"
+  else
+    command -v "$LAB_CLAUDE_CMD" >/dev/null 2>&1 || die "'$LAB_CLAUDE_CMD' not found on PATH (install Claude Code, see README)"
+    run="$LAB_CLAUDE_CMD --model $model --permission-mode acceptEdits --settings '$LAB_CFG/settings.json' \"\$(cat '$pf')\""
+  fi
+  # A clean bash with no profile. Only the variables below enter the session.
+  local envline
+  envline="env -i HOME='$HOME' TERM=xterm-256color LANG=C.UTF-8 LAB_DIR='$LAB_DIR' LAB_CFG='$LAB_CFG'"
+  envline="$envline PATH='$LAB_DIR/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin' bash --noprofile --norc"
+  T new-session -d -s "${PREFIX}$name" -c "$wt" -x 200 -y 50 "$envline" </dev/null >"$LAB_CFG/tmux-start.log" 2>&1 9>&- \
+    || die "tmux new-session failed: $(cat "$LAB_CFG/tmux-start.log")"
+  sleep 0.3
+  T send-keys -t "=${PREFIX}$name:" -l "source '$LAB_DIR/lab-env.sh' && cd '$wt' && $run"
+  T send-keys -t "=${PREFIX}$name:" Enter
+  echo "started ${PREFIX}$name model=$model kind=$kind dir=$wt ($((n + 1))/$MAX)$([ "$dry" = 1 ] && echo ' [dry-run]')"
+}
+
+cmd_list() {
+  local s any=0 name
+  printf '%-24s %-30s %s\n' SESSION STATE LAST-LINE
+  while read -r s; do
+    [ -n "$s" ] || continue
+    any=1
+    name="${s#"$PREFIX"}"
+    printf '%-24s %-30s %s\n' "$s" "$(session_state "$name")" \
+      "$(T capture-pane -p -t "=$s:" 2>/dev/null | grep -v '^[[:space:]]*$' | tail -1 | cut -c1-60)"
+  done < <(rt_sessions)
+  [ "$any" = 1 ] || echo "(no ${PREFIX}* sessions)"
+  echo "count: $(count_rt)/$MAX"
+}
+
+cmd_status() {
+  local name="${1:?usage: status <name>}"
+  valid_name "$name"
+  exists "$name" || { echo "${PREFIX}$name: absent"; return 1; }
+  echo "${PREFIX}$name: $(session_state "$name")"
+  echo "dir: $(T display-message -p -t "=${PREFIX}$name:" '#{pane_current_path}')"
+  echo "--- last 8 lines ---"
+  T capture-pane -p -t "=${PREFIX}$name:" -S -60 | grep -v '^[[:space:]]*$' | tail -8
+}
+
+cmd_nudge() {
+  local name="${1:?usage: nudge <name> <text>}"
+  shift
+  local text="$*"
+  [ -n "$text" ] || die "nudge needs text"
+  valid_name "$name"
+  exists "$name" || die "no such session ${PREFIX}$name"
+  T send-keys -t "=${PREFIX}$name:" -l "$text"
+  sleep 0.4
+  T send-keys -t "=${PREFIX}$name:" Enter
+  echo "nudged ${PREFIX}$name"
+}
+
+cmd_tail() {
+  local name="${1:?usage: tail <name> [lines]}" n="${2:-60}"
+  valid_name "$name"
+  exists "$name" || die "no such session ${PREFIX}$name"
+  [[ "$n" =~ ^[0-9]+$ ]] || die "lines must be a number"
+  T capture-pane -p -t "=${PREFIX}$name:" -S "-$n" | tail -n "$n"
+}
+
+cmd_kill() {
+  local name="${1:?usage: kill <name>}"
+  valid_name "$name"
+  exists "$name" || die "no such session ${PREFIX}$name"
+  T kill-session -t "=${PREFIX}$name" && echo "killed ${PREFIX}$name"
+}
+
+sub="${1:-}"
+shift || true
+case "$sub" in
+  start) cmd_start "$@" ;;
+  list|ls) cmd_list ;;
+  count) count_rt ;;
+  status) cmd_status "$@" ;;
+  nudge) cmd_nudge "$@" ;;
+  tail) cmd_tail "$@" ;;
+  kill) cmd_kill "$@" ;;
+  *) sed -n '2,13p' "$0" >&2; exit 64 ;;
+esac
