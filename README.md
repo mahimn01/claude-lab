@@ -1,20 +1,84 @@
 # claude-lab
 
-A launcher that starts [Claude Code](https://docs.claude.com/en/docs/claude-code) with settings tuned to use
-fewer tokens and less of your plan's allowance, without giving up quality on hard problems.
+[![License: MIT](https://img.shields.io/github/license/mahimn01/claude-lab)](LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/mahimn01/claude-lab?style=flat)](https://github.com/mahimn01/claude-lab/stargazers)
+[![Last commit](https://img.shields.io/github/last-commit/mahimn01/claude-lab)](https://github.com/mahimn01/claude-lab/commits/main)
 
-It is a thin layer. It does not patch Claude Code and it does not edit your normal Claude settings. Plain
-`claude` keeps working exactly as before. Only sessions you start with `claude-lab` get the tuned setup.
+**Run [Claude Code](https://docs.claude.com/en/docs/claude-code) with settings tuned to use fewer tokens, without touching your normal `claude` setup.**
 
-There is also an optional second part, in `parallel/`: a small runner that keeps up to four Claude Code
-sessions going at once, each in its own git worktree, with strict safety rules. See
-[Parallel session runner](#parallel-session-runner-optional).
+Why you might want it:
+
+- **Smaller, cheaper by default.** A 300k context cap, Sonnet as the lead model with Opus kept for review and hard reasoning, capped tool output, and fewer idle tools in the prompt.
+- **See where your tokens go.** A status line shows context size and prompt-cache time left; `lab-usage-scan` reads your own transcripts and shows which tools and models use the most.
+- **Opt-in and reversible.** It is a thin launcher. It does not patch Claude Code and does not edit your Claude settings. Plain `claude` keeps working exactly as before; only sessions started with `claude-lab` get the tuned setup.
+
+### Quick start (about 20 seconds)
+
+You need Python 3.10+, git and Claude Code (`claude`) on your PATH.
+
+```
+git clone https://github.com/mahimn01/claude-lab && cd claude-lab
+scripts/install.sh              # symlinks into ~/.local/bin; edits nothing else
+claude-lab doctor               # check Claude Code and where lab state will live
+claude-lab --dry-run            # print the exact command and settings; starts nothing
+claude-lab                      # start a tuned interactive session in the current folder
+```
+
+### What it looks like
+
+Real output from this repo on Linux (abridged; paths shortened). None of these commands calls a model.
+
+```
+$ claude-lab doctor
+{
+  "claude": "2.1.197 (Claude Code)",
+  "baseline": "none yet: run `claude-lab doctor save`",
+  "lab_plugin": "~/claude-lab/plugin"
+}
+
+$ claude-lab --dry-run
+would start (nothing launched, no model call):
+~/.local/bin/claude \
+  --setting-sources project,local \
+  --settings /tmp/claude-lab-preview-xxxx/settings.json \
+  --plugin-dir ~/claude-lab/plugin \
+  --model claude-sonnet-5-5 \
+  --autocompact 300k \
+  --append-system-prompt [scoped instructions and lab workflow] \
+  --name Claude Lab balanced \
+  --session-id 8f35c117-1c73-4621-8ca5-ee4280604a5d
+
+$ claude-lab route "fix the failing test in totals.py"
+{"model":"claude-sonnet-5-5","effort":"medium","reason":"default route","financial":false,"hard":false}
+```
 
 > Honest note: the savings below come from how the settings work (smaller context, cheaper default model,
 > fewer idle tools, less tool output). They are reasoned, and each one is a setting you can read in
 > `bin/lab.py`. This repo does not ship benchmark numbers. To measure on your own work, use
 > `claude-lab benchmark` and `lab-usage-scan` (both described below). Nothing here calls a model unless you
 > start a session.
+
+### How it fits together
+
+```mermaid
+flowchart TD
+    U["claude-lab &quot;your task&quot;"] --> L["bin/lab.py launcher"]
+    S["Your Claude settings<br/>read only, permission rules kept"] -.-> L
+    L -->|writes| R["Per-run folder<br/>settings.json, brief, plan, notes"]
+    L -->|"claude --settings run/settings.json<br/>--plugin-dir plugin --autocompact 300k<br/>--model Sonnet"| C["Claude Code session"]
+    C --> E["Env caps<br/>tool output, subagent depth and count"]
+    C --> SL["Status line<br/>context, cache time left<br/>bin/lab_statusline.py"]
+    C --> H["Prompt hook<br/>bin/ready_guard.py"]
+    C --> P["harness-lab plugin"]
+    P --> A["Agents<br/>implementer, investigator: Sonnet<br/>reviewer, reasoner: Opus"]
+    P --> T["Tools<br/>checkpoint, verify, select_project"]
+    P --> K["Skills<br/>work-task, code-first-data"]
+    T -->|"handoff and check evidence"| R
+    C -.->|"transcripts"| X["lab-usage-scan<br/>reads only"]
+```
+
+Plain `claude` never goes through any of this. There is also an optional tmux and git-worktree runner for up to four parallel sessions; see
+[Parallel session runner](#parallel-session-runner-optional).
 
 ## What you get
 
@@ -56,7 +120,7 @@ overwrite an existing command unless you pass `--force`.
 Model ids are pinned in `bin/lab.py`. If your Claude Code uses other ids, set `CLAUDE_LAB_SONNET` and
 `CLAUDE_LAB_OPUS`. The plugin tests need a Claude Code that has the `claude plugin test` command.
 
-## Quick start
+## Usage
 
 ```
 claude-lab --dry-run             # print the exact command and settings; starts nothing, no model call
@@ -187,9 +251,16 @@ parallel/       optional tmux + worktree session runner
 hooks/          authorship hooks (commit-msg, pre-push)
 scripts/        install, run-tests, scan-secrets, check-authorship, install-hooks
 docs/bili.md    the optional proxy and its risks
+docs/social-preview.png   repository social preview image
+.github/        issue templates
 tests/          model-free tests
 ```
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to run the tests and the repo's authorship rule, and
+[SECURITY.md](SECURITY.md) for reporting a problem.
+
 ## License
 
-See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).
