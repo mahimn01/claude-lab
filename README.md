@@ -1,177 +1,195 @@
 # claude-lab
 
-claude-lab runs several Claude Code sessions at the same time on one machine. Each session works on its own task, in its own copy of your repository, and finishes by opening a draft pull request. You read the draft pull requests and decide what to merge.
+A launcher that starts [Claude Code](https://docs.claude.com/en/docs/claude-code) with settings tuned to use
+fewer tokens and less of your plan's allowance, without giving up quality on hard problems.
 
-It is a small set of shell scripts. It uses tmux, git worktrees, and the GitHub CLI. There is no server and nothing to install beyond those tools.
+It is a thin layer. It does not patch Claude Code and it does not edit your normal Claude settings. Plain
+`claude` keeps working exactly as before. Only sessions you start with `claude-lab` get the tuned setup.
 
-## Why
+There is also an optional second part, in `parallel/`: a small runner that keeps up to four Claude Code
+sessions going at once, each in its own git worktree, with strict safety rules. See
+[Parallel session runner](#parallel-session-runner-optional).
 
-One Claude Code session is slow when you have several independent tasks. Running them one after another wastes time. Running them in the same folder makes them overwrite each other. claude-lab gives each task its own folder and branch, keeps the number of sessions small enough to follow, and puts rules in place so that a session cannot merge, force-push, or push to your main branch.
+> Honest note: the savings below come from how the settings work (smaller context, cheaper default model,
+> fewer idle tools, less tool output). They are reasoned, and each one is a setting you can read in
+> `bin/lab.py`. This repo does not ship benchmark numbers. To measure on your own work, use
+> `claude-lab benchmark` and `lab-usage-scan` (both described below). Nothing here calls a model unless you
+> start a session.
 
-## Requirements
+## What you get
 
-- Linux or macOS, with `bash`
-- `git` (2.5 or newer, for worktrees)
-- `tmux`
-- `gh`, the GitHub CLI, logged in (`gh auth login`)
-- Claude Code (`claude`), logged in
-- `python3` (used for one small setting change, see the safety notes)
-- `flock` is optional. Without it, claude-lab uses a lock folder instead.
+| Optimization | What it does | Why it saves tokens or money |
+|---|---|---|
+| Context cap and compaction | Starts Claude with `--autocompact 300k` | Every message re-reads the whole context. A smaller ceiling means each call re-reads less, and compaction runs before the context gets huge. A window you set yourself (`CLAUDE_CODE_AUTO_COMPACT_WINDOW`) wins. |
+| Sonnet by default, Opus on purpose | Lead model is Sonnet. Opus is used for the `reviewer` and `reasoner` agents and as the `advisorModel` | Sonnet costs much less per token. Opus is spent only where a second, stronger opinion matters. The lead model is fixed for a task, because switching models in a session rebuilds the prompt cache. |
+| Effort routing | `modelSettings`: Sonnet at medium effort, Opus at high | Less hidden thinking on routine work. |
+| Subagent limits | Subagents run on Sonnet. Spawn depth 1, no forked history, at most 4 at once | Subagents each carry their own context. Limiting depth, count and history stops cost multiplying. |
+| Cap on tool output | `MAX_MCP_OUTPUT_TOKENS=8000`, `bashOutputMaxChars=15000` | Huge tool results sit in the context for the rest of the session. A cap keeps them small. |
+| Fewer tools and skills in the prompt | 15 rarely used built-in tools are hidden; 23 skills become "user-invocable-only" (still available as `/name`) | Tool and skill descriptions are sent on every request. The source notes one of the hidden tools alone cost about 10k tokens per interactive request. `--full-tools` turns this off. |
+| No background surprises | Auto-updater off, memory writes off, prompt suggestions off, goal check-ins off, cron/wakeup/remote-trigger tools hidden | Removes model calls you did not ask for. |
+| Quiet sessions | Only the safety hooks you name are carried over (`CLAUDE_LAB_KEEP_HOOKS`); noisy plugins can be left out (`CLAUDE_LAB_DISABLE_PLUGINS`) | Less startup text and fewer injected messages. |
+| Status line | Shows context size, prompt-cache time left, compactions and plan usage, with plain-word warnings | The costly moments are a cache miss (the whole context is re-sent at full price) and a bloated or repeatedly compacted context. The bar tells you when to start fresh. It never pings the model to keep the cache warm. |
+| Plugin agents | `implementer` (Sonnet, medium effort), `investigator` (low effort, no project notes), `reviewer` and `reasoner` (Opus, high effort) | Each job gets the cheapest setup that fits it. Reviews come from a separate agent that did not write the code. |
+| Task workflow and budget | A short workflow prompt: work small tasks directly; for big ones use at most 4 workers, 1 review plus 1 re-review, and stop to ask at about 2M tokens | A soft budget. It guides and never blocks. |
+| Handoff files | A checkpoint tool writes brief, plan, context and verification notes outside your project | At a task boundary you start fresh and read about 6000 characters of notes instead of dragging the whole conversation along. |
+| Checked results | Acceptance checks run as plain argument lists (no shell, an allowed-program list, 60 second timeout), keyed to a fingerprint of your source. Code changes need an independent reviewer approval | Fewer "it works" claims that do not hold, which means fewer expensive correction rounds. |
+| Guarded data work | A `code-first-data` skill tells Claude to process bulk data with a script and return a summary | Raw dumps in the context are the most common token sink. |
+| Usage scan | `lab-usage-scan` reads your own Claude transcripts and reports model split and which tools produce the most output | Shows where your tokens really go, so you can change habits or settings. |
+| Account fallback (optional) | If you configure a second login, a supervisor can switch accounts at an idle moment when the first hits its limit | Keeps long work moving. Off unless you run `claude-lab auth fallback`. |
+| bili proxy (optional, experimental) | Folds old conversation into summaries through a local proxy | **Off by default and not recommended without measuring.** See [docs/bili.md](docs/bili.md). |
+
+## Install
+
+You need Python 3.10 or newer, git, and Claude Code (`claude`) on your PATH. Node is needed for the plugin
+hooks. `tmux` is only needed for the parallel runner.
+
+```
+git clone https://github.com/mahimn01/claude-lab
+cd claude-lab
+scripts/install.sh          # symlinks claude-lab, lab-usage-scan, claude-lab-sessions into ~/.local/bin
+claude-lab doctor           # checks Claude Code and where lab state will live
+```
+
+`scripts/install.sh --prefix DIR` installs somewhere else. It never edits your Claude settings and does not
+overwrite an existing command unless you pass `--force`.
+
+Model ids are pinned in `bin/lab.py`. If your Claude Code uses other ids, set `CLAUDE_LAB_SONNET` and
+`CLAUDE_LAB_OPUS`. The plugin tests need a Claude Code that has the `claude plugin test` command.
 
 ## Quick start
 
-```bash
-git clone <this repository> claude-lab
-cd claude-lab
-
-cp .env.example .env
-# edit .env: set LAB_REPO_URL to the repository your sessions will work on
-
-scripts/init-repo.sh                      # clones the repository into ./repo
-scripts/install-hooks.sh ./repo           # optional: also check commits made by hand in ./repo
-
-# start a session that implements a ticket and opens a draft PR
-./launch.sh fix-login - prompts/implement-ticket.md \
-  --set TICKET=ABC-12 --set "TICKET_TEXT=Login fails when the email has a plus sign."
-
-bin/claude-lab list                       # see all sessions and what each one is doing
-bin/claude-lab tail fix-login 40          # last 40 lines of a session
-bin/claude-lab nudge fix-login "yes"      # type an answer into a session
-bin/claude-lab kill fix-login             # stop a session
+```
+claude-lab --dry-run             # print the exact command and settings; starts nothing, no model call
+claude-lab demo --dry-run        # same, for the bundled demo project
+claude-lab                       # start an interactive tuned session in the current folder
+claude-lab "fix the failing test in parser.py"
+claude-lab --mode deep "refactor the importer"
+claude-lab --model opus          # use Opus as the lead for this session
+claude-lab --full-tools          # undo the tool and skill cuts for this session
+claude-lab doctor save           # remember a hash of your Claude config; doctor then reports if it ever changes
 ```
 
-Add `bin/` to your `PATH` if you want to type `claude-lab` instead of `bin/claude-lab`.
+Everything the launcher writes goes under `~/.local/state/claude-lab` (run folders) and
+`~/.config/claude-lab`. Both can be moved with `CLAUDE_LAB_STATE_DIR` and `CLAUDE_LAB_CONFIG_DIR`.
+For defaults you always want, put `KEY=VALUE` lines in `~/.config/claude-lab/env`.
 
-To try it without calling Claude, add `--dry-run` to `launch.sh`. It creates the worktree and the tmux session but only prints the command it would run.
+Other commands:
+
+| Command | Use |
+|---|---|
+| `claude-lab route "task text"` | Show which model the rule-based router would pick. No model call. |
+| `claude-lab report [run]` | Token counts for a run and an API-price estimate (an estimate, not your bill or your allowance). |
+| `claude-lab benchmark` | Makes two identical copies of the demo project so you can compare plain `claude` and `claude-lab` on the same task yourself. |
+| `claude-lab rate --run DIR --quality 0-5` | Record how a run went. |
+| `claude-lab auth set\|status\|fallback\|primary\|clear` | Optional lab-only login token (see Security). |
+| `lab-usage-scan [--since DATE] [--json]` | Where your tokens and tool output go, split into lab and normal sessions. Reads transcripts only. |
+
+### Settings you can change (environment variables)
+
+`CLAUDE_LAB_STATE_DIR`, `CLAUDE_LAB_CONFIG_DIR`, `CLAUDE_LAB_CLAUDE` (path to `claude`),
+`CLAUDE_LAB_SONNET`, `CLAUDE_LAB_OPUS`, `CLAUDE_LAB_SOURCE_SETTINGS` (the settings file the lab starts from,
+default `~/.claude/settings.json`), `CLAUDE_LAB_KEEP_HOOKS`, `CLAUDE_LAB_DISABLE_PLUGINS`,
+`CLAUDE_LAB_MCPORTER_BLOCK`, `CLAUDE_LAB_FINANCIAL_TERMS`, `CLAUDE_LAB_CORE_HEADINGS`,
+`CLAUDE_LAB_POLICY_HEADINGS`, `CLAUDE_LAB_TOKEN_FILE`, `CLAUDE_LAB_TOKEN_BACKEND`, `CLAUDE_LAB_PROTECT`,
+`CLAUDE_LAB_DATA_DIR`. Each one is documented next to its use in `bin/lab.py`.
 
 ## How it works
 
-1. **`launch.sh <name> <branch|-> <prompt-file>`** makes a git worktree at `worktrees/<name>`. The branch is `<LAB_BRANCH_PREFIX><name>` (default `lab/<name>`) unless you give a branch. It is cut from `origin/<LAB_BASE_BRANCH>` (default `origin/main`).
-2. It builds the session prompt: `prompts/COMMON.md` (the rules every session follows) followed by your prompt file. Placeholders like `{{TICKET}}` are filled in from `--set KEY=VALUE`. The result is saved as `prompts/.run-<name>.md`.
-3. **`bin/claude-lab start`** opens a tmux session named `rt-<name>`, starts a clean `bash` in the worktree, and runs Claude Code with the prompt as its first message.
-4. The session works alone: it writes a failing test, implements, commits, pushes its own branch, and opens a **draft** pull request.
-5. It writes a short report to `reports/<name>.md` and stops. You review the draft PR and the report.
+`claude-lab` writes a per-run folder, then starts `claude` with `--setting-sources project,local` (or none,
+for a launch in your home folder), `--settings <run>/settings.json`, `--plugin-dir plugin`, the pinned lead
+model, the compaction cap, an appended system prompt, and a fixed session id. The generated settings keep
+every permission rule from your own settings and add to them: they never remove one.
 
-### Worktrees
+The bundled plugin (`plugin/`, named `harness-lab`) adds the four agents, a rule-based router, the task
+budget, the checks and the data skill. The router is plain code, not a model: Sonnet by default, a hint to
+use the `reasoner` only when the wording of the task is clearly hard. Tasks that look financial (brokerage,
+orders, options and similar, plus any terms you add) are routed to higher effort, get a scoped policy text and
+need a review. This is a guard rail, not a guarantee.
 
-A git worktree is a second working folder for the same repository, on its own branch. Four sessions get four folders under `worktrees/` that all share one `repo/` clone. They cannot overwrite each other's files. Each has its own branch and its own `TMPDIR`.
+## Parallel session runner (optional)
 
-### The 4-session cap
+`parallel/` holds a separate tool, `claude-lab-sessions`, for running several Claude Code sessions side by side.
+`claude-lab start|list|count|status|tail|nudge|kill|protected` forward to it, so one command covers both.
 
-At most 4 `rt-*` sessions run at once. `LAB_MAX_SESSIONS` can lower the number, never raise it. `launch.sh` refuses early when the cap is reached, and `claude-lab start` checks again under a lock so two launches at the same moment cannot both squeeze in. The lab only looks at tmux sessions with its prefix (`rt-` by default), so your other tmux sessions are never listed, touched, or killed. You can also list names that must never be used in `LAB_PROTECTED_SESSIONS`.
+- At most **4** sessions at once. `LAB_MAX_SESSIONS` can lower the cap, never raise it.
+- Each session is a tmux session named `rt-<name>` (prefix configurable) in its own git worktree and branch.
+  The runner only ever touches sessions with that prefix, and refuses names you list as protected.
+- Claude runs with `--permission-mode acceptEdits` and the allow and deny list in
+  `parallel/config/settings.template.json`. It never uses `--dangerously-skip-permissions`. A command outside
+  the allow list makes the session wait, and `list` shows `WAITING-PERMISSION`.
+- **Safety rules, enforced by settings and git hooks:** pull requests are drafts only, a human merges; no push
+  to the main branch; no force-push; no `reset --hard`; no changes to git config; no reading token files or
+  dumping the environment. Treat these as strong defaults, not a security boundary: a determined model or a
+  loose allow list can still do damage, so review the list before you use it on real work.
+- **Authorship rule:** every commit must be authored and committed by the repository owner only. No
+  `Co-Authored-By` lines, no "Generated with" footers. `hooks/commit-msg` and `hooks/pre-push` run
+  `scripts/check-authorship.sh`; install them in any repo with `scripts/install-hooks.sh <repo>`.
+- A model router picks Sonnet for `--kind work` and Opus for `--kind review`.
 
-### Permissions
-
-Sessions run with `--permission-mode acceptEdits`, which approves file edits. Shell commands must match the allow list in `config/settings.template.json`. The same file has a deny list. A command that is not on the allow list makes the session stop and wait. `claude-lab list` then shows `WAITING-PERMISSION`. Answer it with `claude-lab nudge <name> 1`, or tell the session what to do instead. The lab never uses `--dangerously-skip-permissions`.
-
-The template is turned into `~/.config/claude-lab/settings.json` each time a session starts, with your branch prefix and lab folder filled in. Edit the template to change what sessions may do.
-
-### Dedicated git config
-
-`lab-env.sh` points `GIT_CONFIG_GLOBAL` at `~/.config/claude-lab/gitconfig` inside lab sessions only. That file holds the commit identity and the hook folder. Your normal global git config is not changed.
-
-## Adding prompts
-
-A prompt is a Markdown file in `prompts/`. It describes one task. `COMMON.md` is added in front of it automatically, so do not repeat the rules.
-
-1. Copy one of the examples (`implement-ticket.md`, `review-pr.md`, `write-tests.md`) to `prompts/my-task.md`.
-2. Write the task in plain steps: what to read, what to change, how to check it, what the draft PR should say.
-3. Use placeholders for anything that changes per run: `{{TICKET}}`, `{{TARGET}}`, `{{PR}}`.
-4. Launch it: `./launch.sh my-run - prompts/my-task.md --set TARGET=src/parser.py`.
-
-Built-in placeholders, always available: `{{NAME}}`, `{{BRANCH}}`, `{{BASE}}`, `{{LAB_DIR}}`, `{{REPORT_FILE}}`, `{{TEST_CMD}}`. `launch.sh` warns when a placeholder is left unfilled.
-
-For a read-only task, add `--kind review`. Review sessions use `LAB_MODEL_REVIEW` (default `opus`). Work sessions use `LAB_MODEL_WORK` (default `sonnet`). `--model <name>` overrides both.
-
-Keep private details (real project names, internal ticket text) in `--set` arguments or in prompt files you do not commit, not in the shared templates.
-
-## Configuration
-
-All settings are in `.env.example`, with comments. The important ones:
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `LAB_REPO_URL` | none | Repository the sessions work on |
-| `LAB_DIR` | folder of `lab-env.sh` | Where `repo/`, `worktrees/`, `reports/`, `tmp/` live |
-| `LAB_MAX_SESSIONS` | 4 | Concurrent sessions, 4 at most |
-| `LAB_SESSION_PREFIX` | `rt-` | tmux session name prefix |
-| `LAB_BRANCH_PREFIX` | `lab/` | Branch name prefix |
-| `LAB_BASE_BRANCH` | `main` | Branch to cut from and open PRs against |
-| `LAB_CLAUDE_CMD` | `claude` | Command that starts Claude Code |
-| `LAB_AUTHOR_NAME`, `LAB_AUTHOR_EMAIL` | the project owner | The only identity allowed on commits |
-
-Values already in your environment win over `.env`. `.env` is read as plain `KEY=VALUE` lines and is never executed.
-
-### Logging in without a browser
-
-If the machine has no browser, run `claude setup-token` on a machine where you are logged in. Save the result in `~/.config/claude-headless/token` and run `chmod 600` on it. Then set `LAB_CLAUDE_CMD=claude-headless` in `.env`. `bin/claude-headless` refuses to run unless the file mode is 600.
-
-## Safety notes
-
-- **Draft PRs only.** Sessions open pull requests with `gh pr create --draft`. They cannot mark a PR ready, close it, or merge it.
-- **Never push the main branch.** The deny list blocks it, the prompt forbids it, and the pre-push hook refuses it in lab sessions.
-- **Never force-push.** The deny list blocks `--force`, `-f`, `--force-with-lease`, and `+ref`. The pre-push hook refuses non-fast-forward pushes in lab sessions.
-- **A human merges.** Nothing in the lab merges. You review each draft PR and merge it yourself.
-- **Only `<LAB_BRANCH_PREFIX>*` branches can be pushed.** The allow list covers nothing else.
-- **No `--no-verify`, no `git config`, no `git reset --hard`, no `git clean`, no `rm -rf`, no `sudo`.** All denied.
-- **Credentials stay out of reach.** Sessions start in a clean environment (`env -i`). The deny list blocks reading `~/.ssh`, `~/.config/gh`, the token file, and any `.env` file, and blocks `gh auth` and `gh api`.
-- **One file outside the lab is edited.** Unless you set `LAB_PREACCEPT_TRUST=0`, `launch.sh` marks the new worktree as trusted in `~/.claude.json`, so a fresh session does not stop at the folder-trust question. It also sets the first-run flags there.
-- **This is a safety net, not a sandbox.** Read the allow list before you run the lab on a repository you care about. Run it on a machine or account where a mistake is cheap.
-
-## Authorship rule
-
-Every commit is authored and committed by one person: the identity in `LAB_AUTHOR_NAME` and `LAB_AUTHOR_EMAIL` (the project owner, Mahimn Patel, by default). No `Co-Authored-By` lines, no "Generated with" footers, no AI attribution of any kind. If you fork this project, change those two variables to your own identity.
-
-Three layers enforce it:
-
-1. The Claude settings turn off Claude Code's own commit and PR attribution.
-2. The prompt rules tell each session not to add any.
-3. `scripts/check-authorship.sh` fails when a commit has a different author or committer, a co-author trailer, or AI attribution in its message.
-
-### Installing the hooks
-
-In a repository, run:
-
-```bash
-scripts/install-hooks.sh /path/to/repo
+```
+cp parallel/.env.example parallel/.env     # set LAB_REPO_URL and the author identity
+parallel/scripts/init-repo.sh              # clones your repository into parallel/repo
+parallel/launch.sh fix-parser - parallel/prompts/implement-ticket.md --set TICKET=123
+claude-lab list                            # see the sessions and their state
 ```
 
-This sets `core.hooksPath` in that repository's local git config to this project's `hooks/` folder. It does not touch your global config, and it stops if the repository already uses another hooks path. In that case, call `scripts/check-authorship.sh --commit-msg "$1"` from your `commit-msg` hook and `scripts/check-authorship.sh --pre-push` from your `pre-push` hook.
+`launch.sh` makes the worktree, fills the `{{PLACEHOLDERS}}` in the prompt, and starts the session.
+By default it pre-accepts Claude Code's first-run and folder-trust prompts for that worktree by editing
+`~/.claude.json`; set `LAB_PREACCEPT_TRUST=0` to skip that. `claude-headless` is an optional wrapper that
+runs `claude` with a long-lived token read from a `0600` file.
 
-- `commit-msg` rejects a commit whose message has a trailer or AI attribution, or whose author or committer is not the allowed identity.
-- `pre-push` checks every commit being pushed. In lab sessions it also refuses pushes to `main` and force-pushes.
+## Security
 
-Lab sessions use these hooks automatically through the dedicated git config. You can also check a range by hand:
+- The lab never reads, changes or copies your saved Claude login. An optional lab-only token (`claude-lab auth set`)
+  is kept in the macOS Keychain on a Mac, and in private `0600` files under `~/.config/claude-lab/tokens`
+  elsewhere. `CLAUDE_LAB_TOKEN_FILE` points at one shared token file the lab reads and never writes or deletes.
+  Loose file permissions are refused.
+- Tokens are put into the child process environment in memory, not on a command line.
+- Run state is created with private permissions. Obvious secrets are redacted from recorded notes.
+- `scripts/scan-secrets.sh` scans the tracked files for token and key patterns and personal paths. Run it
+  before you push.
 
-```bash
-scripts/check-authorship.sh origin/main..HEAD
+## Limitations
+
+- Needs a recent Claude Code. Settings keys the lab writes may be ignored by older versions.
+- The model ids are pinned and will go stale. Override them with the environment variables above.
+- The savings are not measured here. Hidden tools and a lower effort level can also make Claude less capable
+  on tasks that need them; use `--full-tools` or `--model opus` when that happens.
+- The status line's "cache time left" is an estimate from transcript timestamps.
+- bili is experimental and off by default; read [docs/bili.md](docs/bili.md).
+- The parallel runner needs tmux and git. It was built for Linux and macOS and is not tested on Windows.
+- The tests never call a model, so they cannot show how Claude behaves under these settings.
+
+## Tests
+
+```
+scripts/run-tests.sh
 ```
 
-It exits 0 when everything is fine and 1 when a commit is rejected. Run `tests/test-authorship.sh` to test the checker itself.
+runs everything that needs no model and no network:
 
-## Before you publish your own version
+- Python tests in `tests/` (launcher settings, token store, dispatcher, status line, usage scan, account
+  fallback) with `pytest` or `unittest`;
+- `tests/test-authorship.sh`: the commit-msg and pre-push hooks and the authorship check, in a throwaway repo;
+- `tests/test-parallel.sh`: the session runner with `--dry-run` on a private tmux socket;
+- the plugin tests (`claude plugin test plugin`), skipped when your Claude Code lacks that command;
+- the secret scan.
 
-Run `scripts/scan-secrets.sh`. It looks through tracked files for token prefixes, private keys, bearer tokens, assigned credentials, phone numbers, IP addresses, and email addresses other than the allowed one. It is a safety net, so read your diff as well. `.gitignore` already excludes `.env`, `repo/`, `worktrees/`, `reports/`, and `tmp/`.
+## Layout
 
-## Architecture
-
-- `launch.sh`: creates the worktree, builds the prompt, starts the session.
-- `lab-env.sh`: loads `.env`, sets defaults, the git identity, `PATH`, and a per-session `TMPDIR`. Sourced by everything else.
-- `bin/claude-lab`: starts, lists, tails, nudges, and kills `rt-*` tmux sessions, and enforces the cap and the model choice.
-- `bin/claude-headless`: optional wrapper to log in with a token file.
-- `config/settings.template.json`: Claude Code allow and deny lists, rendered at session start.
-- `prompts/`: `COMMON.md` (rules for every session) and task templates.
-- `hooks/` and `scripts/check-authorship.sh`: commit-msg and pre-push checks.
-- `scripts/init-repo.sh`, `install-hooks.sh`, `scan-secrets.sh`: setup and checks.
-- `tests/test-authorship.sh`: self-test for the authorship checker.
-- Created at run time and ignored by git: `repo/` (the clone), `worktrees/`, `reports/`, `tmp/`, `prompts/.run-*.md`.
-
-## Limits
-
-- A session waits for you when it needs a command that is not on the allow list. Check `claude-lab list` now and then.
-- The `WAITING-PERMISSION` and rate-limit detection reads the tmux screen and can miss new wording from Claude Code.
-- A repository that sets its own `core.hooksPath` bypasses the lab hooks. Always run `scripts/check-authorship.sh` before you push by hand.
+```
+bin/            claude-lab (command), lab.py (launcher), token_store.py, bili_proxy.py,
+                lab_statusline.py, lab-usage-scan, fallback.py, accounts.py, ready_guard.py
+plugin/         the harness-lab plugin: agents, hooks, skills, tests
+references/     the task-workflow prompt
+demo-project/   a tiny project with a bug, for dry runs and benchmarks
+parallel/       optional tmux + worktree session runner
+hooks/          authorship hooks (commit-msg, pre-push)
+scripts/        install, run-tests, scan-secrets, check-authorship, install-hooks
+docs/bili.md    the optional proxy and its risks
+tests/          model-free tests
+```
 
 ## License
 
-MIT. See `LICENSE`.
+See [LICENSE](LICENSE).
