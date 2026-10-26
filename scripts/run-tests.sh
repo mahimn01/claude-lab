@@ -20,7 +20,7 @@ step "parallel runner (dry-run, private tmux socket)"
 bash tests/test-parallel.sh || status=1
 
 step "plugin tests (no model calls)"
-if command -v claude >/dev/null 2>&1 && claude plugin test --help >/dev/null 2>&1; then
+if command -v claude >/dev/null 2>&1 && claude plugin --help 2>&1 | grep -Eq '^[[:space:]]+test([[:space:]|]|$)'; then
   claude plugin test plugin || status=1
 else
   echo "skipped: this Claude Code has no 'plugin test' command (try a newer version)"
