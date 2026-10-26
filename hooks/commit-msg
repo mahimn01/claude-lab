@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# commit-msg hook: reject co-author trailers, AI attribution, and any identity other than the allowed one.
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "$here/../scripts/check-authorship.sh" --commit-msg "$1"

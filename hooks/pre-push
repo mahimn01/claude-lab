@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# pre-push hook: check every commit being pushed. In lab sessions (LAB_PROTECT_BASE=1) it also refuses
+# pushes to main/master and non-fast-forward (force) pushes.
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "$here/../scripts/check-authorship.sh" --pre-push
