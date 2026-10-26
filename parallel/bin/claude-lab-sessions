@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
-# claude-lab: run up to 4 Claude Code sessions at once, each in its own tmux session.
+# claude-lab-sessions: run up to 4 Claude Code sessions at once, each in its own tmux session.
 #
-#   claude-lab start <name> <worktree_dir> <prompt_file> [model] [--kind work|review] [--model M] [--dry-run]
-#   claude-lab list | count | status <name> | tail <name> [lines] | nudge <name> <text> | kill <name>
+#   claude-lab-sessions start <name> <worktree_dir> <prompt_file> [model] [--kind work|review] [--model M] [--dry-run]
+#   claude-lab-sessions list | count | status <name> | tail <name> [lines] | nudge <name> <text> | kill <name>
 #
 # Sessions are named <LAB_SESSION_PREFIX><name> (default rt-<name>). The lab only touches that prefix.
+# (The `claude-lab` command forwards start|list|count|status|tail|nudge|kill here.)
 # Hard cap: 4 sessions. LAB_MAX_SESSIONS can lower it, never raise it.
 # Permissions: Claude Code runs with --permission-mode acceptEdits plus an allow/deny list rendered
 # from config/settings.template.json. It never uses --dangerously-skip-permissions. A command outside
-# the allow list makes the session wait; `claude-lab list` shows WAITING-PERMISSION.
+# the allow list makes the session wait; `claude-lab-sessions list` shows WAITING-PERMISSION.
 # Model router: kind "work" uses LAB_MODEL_WORK, kind "review" uses LAB_MODEL_REVIEW.
 set -uo pipefail
 
-LAB_DIR="${LAB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+LAB_DIR="${LAB_DIR:-$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)}"
 export LAB_DIR
 # shellcheck source=../lab-env.sh
 source "$LAB_DIR/lab-env.sh"
@@ -28,7 +29,7 @@ PROTECTED="$LAB_PROTECTED_SESSIONS"
 T() {
   if [ -n "${LAB_TMUX_SOCKET:-}" ]; then tmux -L "$LAB_TMUX_SOCKET" "$@"; else tmux "$@"; fi
 }
-die() { echo "claude-lab: $*" >&2; exit 1; }
+die() { echo "claude-lab-sessions: $*" >&2; exit 1; }
 
 is_protected() {
   local s
@@ -53,7 +54,7 @@ ensure_config() {
   local cf="$LAB_CFG/gitconfig"
   git config --file "$cf" user.name "$LAB_AUTHOR_NAME"
   git config --file "$cf" user.email "$LAB_AUTHOR_EMAIL"
-  git config --file "$cf" core.hooksPath "$LAB_DIR/hooks"
+  git config --file "$cf" core.hooksPath "$LAB_HOOKS_DIR"
   git config --file "$cf" init.defaultBranch main
   git config --file "$cf" commit.gpgsign false
   git config --file "$cf" push.autoSetupRemote true
@@ -221,5 +222,6 @@ case "$sub" in
   nudge) cmd_nudge "$@" ;;
   tail) cmd_tail "$@" ;;
   kill) cmd_kill "$@" ;;
+  protected) echo "$PROTECTED" ;;
   *) sed -n '2,13p' "$0" >&2; exit 64 ;;
 esac

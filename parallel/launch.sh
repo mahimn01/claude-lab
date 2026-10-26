@@ -4,7 +4,7 @@
 # 1. Makes a git worktree at $LAB_DIR/worktrees/<name> on a new branch (<LAB_BRANCH_PREFIX><name> unless
 #    you pass a branch), cut from origin/$LAB_BASE_BRANCH. Set LAUNCH_BASE=<ref> to stack on another branch.
 # 2. Builds the session prompt: prompts/COMMON.md + your prompt file, with {{KEY}} placeholders filled in.
-# 3. Starts the tmux session <LAB_SESSION_PREFIX><name> through bin/claude-lab.
+# 3. Starts the tmux session <LAB_SESSION_PREFIX><name> through bin/claude-lab-sessions.
 #
 # Built-in placeholders: {{NAME}} {{BRANCH}} {{BASE}} {{LAB_DIR}} {{REPORT_FILE}} {{TEST_CMD}}.
 # Add your own with --set KEY=VALUE (for example --set TICKET=123).
@@ -15,7 +15,7 @@ export LAB_DIR
 # shellcheck source=lab-env.sh
 source "$LAB_DIR/lab-env.sh"
 
-usage() { echo "usage: launch.sh <name> <branch|-> <prompt_file> [--set KEY=VALUE]... [claude-lab start flags]" >&2; }
+usage() { echo "usage: launch.sh <name> <branch|-> <prompt_file> [--set KEY=VALUE]... [claude-lab-sessions start flags]" >&2; }
 [ $# -ge 3 ] || { usage; exit 64; }
 name="$1"; branch="$2"; pf="$3"
 shift 3
@@ -39,9 +39,9 @@ REPO="$LAB_REPO_DIR"
 git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1 \
   || { echo "launch: $REPO is not a git repo. Run scripts/init-repo.sh first (needs LAB_REPO_URL)." >&2; exit 1; }
 
-# Refuse early when at the cap. bin/claude-lab checks again under a lock.
+# Refuse early when at the cap. bin/claude-lab-sessions checks again under a lock.
 cap="$LAB_MAX_SESSIONS"; case "$cap" in ''|*[!0-9]*) cap=4 ;; esac; [ "$cap" -gt 4 ] && cap=4
-[ "$("$LAB_DIR/bin/claude-lab" count)" -lt "$cap" ] || { echo "launch: at the cap ($cap sessions)" >&2; exit 1; }
+[ "$("$LAB_DIR/bin/claude-lab-sessions" count)" -lt "$cap" ] || { echo "launch: at the cap ($cap sessions)" >&2; exit 1; }
 
 wt="$LAB_DIR/worktrees/$name"
 base="$LAB_BASE_BRANCH"
@@ -91,4 +91,4 @@ if grep -Eq '\{\{[A-Za-z_]+\}\}' "$combined"; then
   echo "launch: warning: unfilled placeholders in the prompt: $(grep -Eo '\{\{[A-Za-z_]+\}\}' "$combined" | sort -u | tr '\n' ' ')" >&2
   echo "launch: pass them with --set KEY=VALUE" >&2
 fi
-exec "$LAB_DIR/bin/claude-lab" start "$name" "$wt" "$combined" "${passthrough[@]+"${passthrough[@]}"}"
+exec "$LAB_DIR/bin/claude-lab-sessions" start "$name" "$wt" "$combined" "${passthrough[@]+"${passthrough[@]}"}"

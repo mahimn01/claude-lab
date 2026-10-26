@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Environment for claude-lab. Source this file; do not execute it.
-# It is sourced by launch.sh, by bin/claude-lab, and inside every session.
+# Environment for the parallel session runner (claude-lab-sessions). Source this file; do not execute it.
+# It is sourced by launch.sh, by bin/claude-lab-sessions, and inside every session.
 #
 # Settings come from the environment first, then from $LAB_DIR/.env, then from the defaults below.
 # .env is read as plain KEY=VALUE lines. It is never executed.
@@ -29,6 +29,8 @@ _lab_load_env() {
 _lab_load_env "$LAB_DIR/.env"
 unset -f _lab_load_env
 
+# The authorship hooks live at the top of this repository (../hooks); worktrees use them via the lab git config.
+export LAB_HOOKS_DIR="${LAB_HOOKS_DIR:-$(cd "$LAB_DIR/.." && pwd)/hooks}"
 export LAB_REPO_URL="${LAB_REPO_URL:-}"
 export LAB_REPO_DIR="${LAB_REPO_DIR:-$LAB_DIR/repo}"
 export LAB_MAX_SESSIONS="${LAB_MAX_SESSIONS:-4}"
